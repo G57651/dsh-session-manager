@@ -1,0 +1,10 @@
+# dsh-session-manager bundle patch.
+#
+# host half (package main -> index.js): registers the /dsh-session-manager RPC
+# channel behind a loopback trust fence.
+# client half (dsh.client -> exports["./client"] -> client.js): the sidebar
+# panel-list entry plus the main panel it opens.
+
+- insert:
+    - id: dsh-session-manager
+      name: 'dsh-session-manager'

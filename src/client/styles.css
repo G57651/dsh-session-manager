@@ -1,0 +1,326 @@
+/* dsh-session-manager — client styles, injected as a style tag by apply().
+   Class prefix .dsm- avoids collisions with the host. Colors, borders, and
+   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and
+   dark follow the host theme automatically; no theme selectors live here. */
+
+.dsm-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100%;
+  padding: 24px clamp(20px, 4vw, 44px) 40px;
+}
+
+.dsm-head {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dsm-headRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dsm-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsm-headActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dsm-tabs {
+  width: min(460px, 100%);
+}
+
+.dsm-tabCount {
+  opacity: 0.65;
+}
+
+.dsm-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+}
+
+.dsm-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  transition: background 120ms ease;
+}
+
+.dsm-row:last-child {
+  border-bottom: none;
+}
+
+.dsm-row:hover,
+.dsm-rowSelected {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.dsm-rowClickable {
+  cursor: pointer;
+}
+
+.dsm-checkCell {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+/* Keep the primitive checkbox's accessible label but hide its visible text:
+   the row title right next to it already says what this is. */
+.dsm-checkCell label > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.dsm-rowMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dsm-rowTitleLine {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.dsm-rowTitle {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsm-rowTitleMuted {
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 400;
+}
+
+.dsm-pill {
+  flex: none;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+}
+
+.dsm-pillRunning {
+  color: var(--dsw-alias-link);
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.dsm-pillMissing {
+  color: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.dsm-rowMeta {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsm-rowActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.dsm-row:hover .dsm-rowActions,
+.dsm-row:focus-within .dsm-rowActions {
+  opacity: 1;
+}
+
+.dsm-dangerButton.dsm-dangerButton {
+  color: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.dsm-dangerFill.dsm-dangerFill {
+  background: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-bg-base);
+}
+
+.dsm-batchBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding: 10px 14px;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.dsm-batchCount {
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsm-batchOps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dsm-stateBox {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.dsm-stateIcon {
+  color: var(--dsw-alias-label-tertiary);
+  opacity: 0.7;
+}
+
+.dsm-stateTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsm-stateHint {
+  margin: 0;
+  max-width: 420px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsm-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+}
+
+.dsm-noticeError {
+  color: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.dsm-noticeInfo {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsm-noticeClose {
+  flex: none;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.dsm-purgeList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsm-purgeList li {
+  padding: 3px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsm-skeletonRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.dsm-skeletonRow:last-child {
+  border-bottom: none;
+}
+
+.dsm-skeletonBar {
+  height: 10px;
+  border-radius: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  animation: dsm-pulse 1.4s ease-in-out infinite;
+}
+
+.dsm-skeletonBarShort {
+  width: 40%;
+}
+
+@keyframes dsm-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsm-skeletonBar {
+    animation: none;
+  }
+
+  .dsm-row,
+  .dsm-rowActions {
+    transition: none;
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "dsh-session-manager",
+  "version": "0.1.0",
+  "description": "Web 侧边栏会话管理面板：全部 / 已归档 / 已删除视图、刷新、批量管理（归档 / 取消归档 / 删除 / 恢复 / 彻底删除）。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "session-manage.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "package.json"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "session",
+    "web-ui"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.1.7-rc.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.3"
+  },
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs",
+    "smoke": "node scripts/smoke-host.mjs"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "external": []
+    }
+  }
+}
