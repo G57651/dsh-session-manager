@@ -29,7 +29,8 @@
     "node": ">=22",
     "dsh": ">=0.1.7-rc.0"
   },
-  "dependencies": {
+  "dependencies": {},
+  "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.3"
   },
   "scripts": {
