@@ -74,6 +74,7 @@ node scripts/smoke-host.mjs     # host 半功能冒烟（隔离临时 $DSH_HOME�
 
 - **源码语言**：host 半与 client 半均为纯 ESM JavaScript（JSDoc 标注），与已验证的第三方插件先例一致；未用 TypeScript 是因为本插件需在无网络的机器上构建（无编译器可用），client 半由 `scripts/build-client.mjs` 按 `src/client/` 源约定组装成 `window.__ModuleLoader__.load` CJS 单文件。
 - **删除语义**：官方层无删除 API。软删除 = 清单标记 + 原生归档隐藏；彻底删除 = 停活动 + 移除会话目录（有 `locate()` 定位 + `$DSH_HOME/sessions` 路径守卫 + id 校验三重防护，拒绝越界路径）。
-- **幽灵行过滤**：彻底删除后官方 sessionQuery 语料库与 sessionController 在进程重启前仍可能返回残留条目（目录移除不产生 removed 事件）；插件在彻底删除成功时把 id 记入进程级已清除集合，各视图无条件过滤。
+- **幽灵行清理（v0.1.1 修复）**：官方层无删除 API，`api-session/removed` 只由 `session/disposed`（活会话拆卸）发出，而移除会话目录不触发拆卸——所以官方侧边栏既拿不到移除事件，`workspaceRegistry.archivedSessionIds` 与工作区 `sessionIds` 里的条目也无人清理，残留直到进程重启（此时 `bootstrap()` 重扫磁盘才剪掉）。彻底删除成功后插件改为三步失效：逐个工作区 `detachSession(id)`（未记账则空操作）→ `workspaceRegistry.unarchiveSession(id)`（不做存在性校验，条目已消失也照常解析）→ `ctx.emit('api-session/removed', id)` 转发给客户端，客户端 `handleSessionRemoved` 直接丢弃该行。因此无需重启，侧边栏即时同步。此外把 id 记入进程级已清除集合，各视图无条件过滤，作为兜底。
+  - **残留限制**：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，`sessions` 服务没有对外提供驱逐接口（`enter()` 对已存在的会话直接抛错），目录移除不会让缓存失活。进程重启后重扫磁盘会彻底清干净，但同进程内的客户端重连（如刷新 Web 页面）会重新拉到残留条目。桌面端侧边栏为长驻视图、不做整表重拉，不受影响。
 - **归档/删除无远程事件**：这两个操作后列表由 RPC 返回值本地刷新；归档会话是当前激活会话时，原生 UI 会自动切走主面板（官方行为）。
 - 兼容目标 `engines.dsh: ">=0.1.7-rc.0"`（声明性字段，实测于 0.1.7-rc.2）。

@@ -446,6 +446,52 @@ export async function restoreSessions(ctx, ids, { manifest, logger }) {
   return { results }
 }
 
+/**
+ * Invalidate a permanently removed session in every host-side cache that a
+ * directory removal alone cannot touch.
+ *
+ * `sessionQuery` reads `$DSH_HOME/sessions` into a process-lifetime corpus and
+ * `sessionController` mirrors it; neither re-stats disk on write, so a purged
+ * id stays listed until restart. `api-session/removed` is only ever emitted
+ * from `session/disposed` (a live teardown), and removing a directory
+ * disposes nothing — so the client never learns about it and the official
+ * sidebar keeps the row. The workspace registry is worse: the pre-purge
+ * `archiveSession` leaves the id in the global `archivedSessionIds` set and
+ * every workspace keeps its `sessionIds` slot, so the ghost reappears under
+ * Archived. All three are public, idempotent, no-op-safe calls:
+ *   `detachSession`   — no-op when the workspace does not account the id
+ *   `unarchiveSession` — no existence check; an entry whose session is gone
+ *                        still resolves; no-op when the id is not archived
+ *   `api-session/removed` — forwarded to the client, which drops the row
+ */
+export async function invalidateRemovedSession(ctx, id, logger) {
+  const registry = ctx.get('workspaceRegistry')
+  if (registry !== undefined) {
+    const entities = typeof registry.list === 'function' ? (registry.list() ?? []) : []
+    for (const entity of entities) {
+      const accounted = Array.isArray(entity?.sessionIds) ? entity.sessionIds : []
+      if (!accounted.some(entry => String(entry) === String(id))) continue
+      try {
+        await entity.detachSession(id)
+      } catch (error) {
+        if (error?.name !== 'WorkspaceUnknownSessionError') {
+          logger?.warn?.(`[dsh-session-manager] detach ${id} failed: ${error?.message ?? error}`)
+        }
+      }
+    }
+    if (typeof registry.unarchiveSession === 'function') {
+      try {
+        await registry.unarchiveSession(id)
+      } catch (error) {
+        if (error?.name !== 'WorkspaceUnknownSessionError') {
+          logger?.warn?.(`[dsh-session-manager] unarchive ${id} failed: ${error?.message ?? error}`)
+        }
+      }
+    }
+  }
+  ctx.emit?.('api-session/removed', id)
+}
+
 export async function purgeSessions(ctx, ids, { headers, manifest, dshHome, logger, purgeTracker }) {
   const registry = ctx.get('workspaceRegistry')
   const persistence = ctx.get('sessionPersistence')
@@ -454,8 +500,10 @@ export async function purgeSessions(ctx, ids, { headers, manifest, dshHome, logg
   for (const id of ids) {
     const header = headers.get(id)
     if (header === undefined) {
-      // Not on disk and not live: just clean up any trash entry.
+      // Not on disk and not live: clean up any trash entry, then clear the
+      // registry residue that a previous purge left behind.
       await manifest.remove(id)
+      await invalidateRemovedSession(ctx, id, logger)
       purgeTracker?.mark(id)
       results.push({ id, ok: true, freedBytes: 0 })
       continue
@@ -510,6 +558,10 @@ export async function purgeSessions(ctx, ids, { headers, manifest, dshHome, logg
       continue
     }
     await manifest.remove(id)
+    // The directory is gone but every host-side cache still holds the id;
+    // without this the row survives in the sidebar's Archived view until the
+    // client is restarted, when bootstrap prunes it by re-reading disk.
+    await invalidateRemovedSession(ctx, id, logger)
     purgeTracker?.mark(id)
     results.push({ id, ok: true, freedBytes })
   }
