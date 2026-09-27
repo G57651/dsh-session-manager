@@ -19,7 +19,6 @@ DeepSeek Harness Web UI 会话管理插件：在主页侧边栏新增一个「�
 
 1. 打开 DeepSeek Harness，进入侧边栏 **Plugins** 面板。
 2. 选择从**本地路径**安装，填入本目录的绝对路径
-   （例如 `/Users/a0629/Documents/deepseek-harness/dsh-session-manager`）。
 3. 启用后重启 Web UI（或等 HMR 生效），侧边栏出现「会话管理」入口。
 
 **方式 B：CLI 安装**
