@@ -111,6 +111,11 @@ node scripts/smoke-host.mjs     # host 半功能冒烟（隔离临时 $DSH_HOME�
 
 ## 变更记录
 
+### 0.1.3
+
+- **package.json**：`version` 0.1.2 → 0.1.3，声明兼容 DeepSeek Harness 0.2.0-rc.1；`engines.node` 采用仓库收紧值 `^22.19 || >=24`（0.1.2 tarball 里是 `>=22`，advisory 字段，无运行时影响）。
+- 0.2.0-rc.1 兼容性核对（对照宿主源码 `packages/boot/app-boot/src/plugin-compatibility.ts` 的 peer 预检、`packages/host/webserver` 的 `WebRoute{kind,path,handler}`、`packages/client/connection` 的 rpc-host、`packages/client/ui-sidebar`/`ui-slots`/`store`/`ui-primitives` 客户端契约）：本插件未声明任何 `@deepseek-ai/dsh-*` 命名空间 peer（仅 `@deepseek-ai/schemastery ^3.18.3`，不在预检范围），预检天然放行；宿主侧用到的服务与 API 在 0.2.0-rc.1 均未变化，代码零改动。
+
 ### 0.1.2
 
 - **package.json**：`@deepseek-ai/schemastery` 同时声明进 `peerDependencies` 与 `devDependencies`（开发规范 7.3 双声明要求）。
