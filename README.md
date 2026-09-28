@@ -23,7 +23,7 @@ DeepSeek Harness Web UI 会话管理插件：在主页侧边栏新增一个「�
 2. 在输入框（无障碍标签「包名或地址」）填 tarball 的**绝对路径**：
 
    ```
-   /Users/<你的用户名>/Downloads/dsh-session-manager-0.1.1.tgz
+   /Users/<你的用户名>/Downloads/dsh-session-manager-0.1.2.tgz
    ```
 
 3. 安装完成后在 Plugins 面板**启用**该插件——宿主会同时完成 `dsh.profile.bundles` 登记。
@@ -96,6 +96,8 @@ node scripts/build-client.mjs   # 组装 client.js（纯 Node，无外部依赖�
 node scripts/smoke-host.mjs     # host 半功能冒烟（隔离临时 $DSH_HOME，65 项断言）
 ```
 
+> 0.1.2 起 `scripts/` 仅存在于源码仓库，不随 tarball 发布——请 clone 仓库后在仓库根目录运行。
+
 宿主半 RPC 通道为 `/dsh-session-manager`，端点：`list / archive / unarchive / delete / restore / purge / config`，全部接受批量 `ids` 数组并返回逐条结果。
 
 ## 实现说明与已知限制
@@ -106,3 +108,12 @@ node scripts/smoke-host.mjs     # host 半功能冒烟（隔离临时 $DSH_HOME�
   - **残留限制**：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，`sessions` 服务没有对外提供驱逐接口（`enter()` 对已存在的会话直接抛错），目录移除不会让缓存失活。进程重启后重扫磁盘会彻底清干净，但同进程内的客户端重连（如刷新 Web 页面）会重新拉到残留条目。桌面端侧边栏为长驻视图、不做整表重拉，不受影响。
 - **归档/删除无远程事件**：这两个操作后列表由 RPC 返回值本地刷新；归档会话是当前激活会话时，原生 UI 会自动切走主面板（官方行为）。
 - 兼容目标 `engines.dsh: ">=0.1.7-rc.0"`（声明性字段，实测于 0.1.7-rc.2）。
+
+## 变更记录
+
+### 0.1.2
+
+- **package.json**：`@deepseek-ai/schemastery` 同时声明进 `peerDependencies` 与 `devDependencies`（开发规范 7.3 双声明要求）。
+- **package.json**：移除 `scripts` 字段（`build:client` / `smoke` 只在源码仓库提供，tarball 安装后执行必然 ENOENT）。
+- **index.js**：回退 RPC 路由强制 `Content-Type: application/json`，其他媒体类型以 415 拒绝——跨站表单 POST 无法携带该媒体类型，伪造请求到不了分发器；直接 curl 调试需自带 `-H 'Content-Type: application/json'`。
+- **index.js**：日志改走规范 API——`ctx.logger` 可调用时取具名 logger（`ctx.logger('dsh-session-manager')`），宿主仅提供 `{ warn, info }` 对象时回退；修复旧代码在可调用语义下全部日志静默丢失的问题。

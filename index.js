@@ -112,6 +112,15 @@ function registerDirectRpcWebRoute(ctx, webServer, channel, dispatch, logger) {
         res.end()
         return
       }
+      // 0.1.2 hardening: only JSON bodies are accepted. A cross-site "simple
+      // request" (form POST) cannot set this media type, so forged requests
+      // are rejected with 415 before they can reach the dispatcher.
+      const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
+      if (contentType !== 'application/json') {
+        res.writeHead(415, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: 'direct-rpc', result: { ok: false, error: 'unsupported-media-type' } }))
+        return
+      }
       try {
         const body = await readRequestBody(req)
         const request = JSON.parse(body || '{}')
@@ -142,8 +151,27 @@ function readRequestBody(req) {
   })
 }
 
+// 0.1.2: per the host spec (10.1) `ctx.logger` is a logger service — calling
+// it with a name returns a named logger. The previous code treated it as a
+// plain `{ warn, info }` object, so every line was silently dropped when the
+// host exposes the callable form. Try the spec shape first, fall back to the
+// object shape, else null (all call sites use optional chaining).
+function resolveLogger(ctx) {
+  const raw = ctx?.logger
+  if (typeof raw === 'function') {
+    try {
+      const named = raw('dsh-session-manager')
+      if (named && typeof named.warn === 'function') return named
+    } catch {
+      // fall through to the object-shape fallback
+    }
+  }
+  if (raw && (typeof raw.warn === 'function' || typeof raw.info === 'function')) return raw
+  return null
+}
+
 export function apply(ctx, config) {
-  const logger = ctx.logger
+  const logger = resolveLogger(ctx)
   const dshHome = resolveDshHome()
   const manifest = createManifestStore(join(dshHome, 'dsh-session-manager-deleted.json'), logger)
   const titleCache = createTitleCache(join(dshHome, 'dsh-session-manager-titles.json'), logger)
