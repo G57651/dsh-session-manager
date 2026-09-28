@@ -13,33 +13,61 @@ DeepSeek Harness Web UI 会话管理插件：在主页侧边栏新增一个「�
 
 ## 手动安装
 
-> 本插件不会自动安装。任选以下一种方式手动安装到桌面 App 的 profile（`~/.dsh/profiles/desktop`）。
+> ### ⚠️ 必须通过 Plugins 面板安装
+>
+> **手工把文件复制进 `~/.dsh/profiles/<profile>/node_modules/` 不会生效。** 插件管理器在安装成功后会把这个包名追加到 profile `package.json` 的 `dsh.profile.bundles`；宿主只加载该列表里登记过的 bundle 层。没有这条登记的包就是死代码——文件躺在 `node_modules` 里，插件不加载、不报错，并会在 profile 依赖重整时被无声删除。
 
-**方式 A：CLI 从 GitHub 安装（推荐）**
+**方式 A：Web UI 从 tarball 安装（推荐）**
+
+1. 打开 DeepSeek Harness → 侧边栏 **Plugins** 面板 → 安装。
+2. 在输入框（无障碍标签「包名或地址」）填 tarball 的**绝对路径**：
+
+   ```
+   /Users/<你的用户名>/Downloads/dsh-session-manager-0.1.1.tgz
+   ```
+
+3. 安装完成后在 Plugins 面板**启用**该插件——宿主会同时完成 `dsh.profile.bundles` 登记。
+4. 刷新 Web UI（`http://127.0.0.1:19387`），侧边栏出现「会话管理」入口。
+
+**必须是绝对路径。** 安装框只接受绝对路径：`./x.tgz` 与 `~/Downloads/x.tgz` 都会被直接拒绝（`a local path must be absolute`）——`~` 不被 `node:path.isAbsolute` 认可，请写完整路径。
+
+**方式 B：Web UI 从 GitHub 仓库安装**
+
+在同一个输入框填：
+
+```
+github:G57651/dsh-session-manager
+```
+
+仓库自带构建产物（`client.js` 已提交），无需本地构建。安装时需能访问 npm registry（拉取 `@deepseek-ai/schemastery` 依赖）。
+
+**方式 C：Web UI 从本地目录安装**
+
+```sh
+git clone https://github.com/G57651/dsh-session-manager.git /绝对路径/dsh-session-manager
+```
+
+再在输入框填 clone 出来的**绝对目录路径**（同样不能写相对路径或 `~`）。
+
+**⚠️ 不要按包名安装**
+
+本插件**尚未发布到 npm**，且包名 `dsh-session-manager` 在公共 registry 上**已被另一位作者占用**（latest 0.5.3，对方发布的版本序列中同样包含 0.1.1）。
+
+- 在安装框填 `dsh-session-manager` → pnpm 按 registry 包名解析，会**静默装回别人的包**：安装成功、不报任何错，但那是删除 / 归档 / 跨工作区移动 / 收藏 / 标签 / 备注那一套，与本插件功能完全不同。
+- 在安装框填 `@g57651/dsh-session-manager` → 404，因为本包未发布。这是预期结果，不是配置错误。
+
+本包使用 `@g57651` 命名空间，只应通过上面的 tarball / GitHub / 本地目录三种方式安装。
+
+**方式 D：dsh CLI（仅当你另有独立 CLI 环境）**
+
+桌面 App 的安装包内**不含 `dsh` 可执行文件**（PATH、`/usr/local/bin`、`/opt/homebrew/bin`、App bundle 内均无），所以下面命令在桌面 App 默认安装下不可用，仅供已有独立 CLI 者参考：
 
 ```sh
 dsh plugin --profile desktop add github:G57651/dsh-session-manager
-```
-
-源码自带构建产物（`client.js` 已提交），无需本地构建；安装时需能访问 npm registry（拉取 `@deepseek-ai/schemastery` 依赖）。
-
-**方式 B：Web UI 安装**
-
-1. 打开 DeepSeek Harness，进入侧边栏 **Plugins** 面板。
-2. 支持四种来源，任选其一：
-   - **npm 包名 / Git**：填 `github:G57651/dsh-session-manager`
-   - **tarball**：选择 release 或 `pnpm pack` 产出的 `dsh-session-manager-0.1.0.tgz`
-   - **本地路径**：`git clone https://github.com/G57651/dsh-session-manager.git` 后填克隆目录
-3. 启用后重启 Web UI（或等 HMR 生效），侧边栏出现「会话管理」入口。
-
-**方式 C：CLI 从本地目录 / tarball 安装**
-
-```sh
-git clone https://github.com/G57651/dsh-session-manager.git
 dsh plugin --profile desktop add ./dsh-session-manager
-# 或
-dsh plugin --profile desktop add dsh-session-manager-0.1.0.tgz
 ```
+
+注意 CLI 与安装框的路径规则不同：CLI 会先把相对路径锚定为绝对路径（`anchorPathSpec`），因此 `./dsh-session-manager` 在 CLI 下合法，在安装框下会被拒。
 
 **与 `@gehennawu/dsh-service` 并存**：两者功能有重叠且互不相干（各自的回收站清单不互通）。同时启用会出现两个会话管理入口，建议在 Plugins 页停用其一。
 

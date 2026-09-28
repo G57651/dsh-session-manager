@@ -7,4 +7,4 @@
 
 - insert:
     - id: dsh-session-manager
-      name: 'dsh-session-manager'
+      name: '@g57651/dsh-session-manager'
