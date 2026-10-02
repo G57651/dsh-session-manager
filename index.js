@@ -78,6 +78,34 @@ function fail(code, message, details) {
   return { ok: false, error: { code, message: message ?? code, details: details ?? {} } }
 }
 
+/**
+ * Read one config field, tolerating both shapes. Schemastery hands every
+ * `.volatile()` field to `apply` as a stable `{ get() }` reference (develop
+ * docs §3.5: volatile changes commit into the running fiber without a
+ * remount), so the live value must be read through `.get()`; a plain value is
+ * returned verbatim, which keeps this working for a non-volatile Config.
+ * @param {{ get?: () => unknown } | unknown} field
+ */
+function configValue(field) {
+  if (field !== null && typeof field === 'object' && typeof field.get === 'function') return field.get()
+  return field
+}
+
+/**
+ * Snapshot every volatile field into plain values, once per RPC operation.
+ * Values are captured per request rather than cached in a closure so a
+ * volatile update (no remount) is visible on the next call, while a single
+ * request never observes two different values mid-flight.
+ */
+function readConfig(config) {
+  return {
+    confirmPurge: configValue(config.confirmPurge) === true,
+    autoRefresh: configValue(config.autoRefresh) === true,
+    maxBatchSize: configValue(config.maxBatchSize),
+    titleFetchLimit: configValue(config.titleFetchLimit),
+  }
+}
+
 function resolveDshHome() {
   const fromEnv = process.env.DSH_HOME
   return resolve(typeof fromEnv === 'string' && fromEnv !== '' ? fromEnv : join(homedir(), '.dsh'))
@@ -125,17 +153,20 @@ function normalizeFailure(error) {
   return { code: 'internal', message: 'internal-error', details: {} }
 }
 
-function withBatch(config, payload, run, logger) {
+async function withBatch(config, payload, run, logger) {
   const raw = Array.isArray(payload?.ids) ? payload.ids : []
   const ids = [...new Set(raw.filter(id => typeof id === 'string' && id !== ''))]
-  if (ids.length === 0) return Promise.resolve(fail('no-ids', 'no session ids were supplied'))
-  if (ids.length > config.maxBatchSize) {
-    return Promise.resolve(fail('too-many-ids', `at most ${config.maxBatchSize} ids are accepted per request`, { count: ids.length, maxBatchSize: config.maxBatchSize }))
+  const { maxBatchSize } = readConfig(config)
+  if (ids.length === 0) return fail('no-ids', 'no session ids were supplied')
+  if (ids.length > maxBatchSize) {
+    return fail('too-many-ids', `at most ${maxBatchSize} ids are accepted per request`, { count: ids.length, maxBatchSize })
   }
-  return run(ids).catch((error) => {
+  try {
+    return await run(ids)
+  } catch (error) {
     logger?.warn?.(`[dsh-session-manager] batch failed: ${error?.message ?? error}`)
     return fail('internal', error?.message ?? 'internal-error')
-  })
+  }
 }
 
 /**
@@ -169,7 +200,7 @@ function registerDirectRpcWebRoute(ctx, webServer, channel, dispatch, logger) {
         return
       }
       try {
-        const body = await readRequestBody(req)
+        const body = await readRequestBody(req, res)
         const request = JSON.parse(body || '{}')
         const suffix = typeof req.url === 'string' ? req.url.split('?')[0].replace(/^.*\/dsh-session-manager\/?/, '') : ''
         const endpoint = suffix !== '' ? suffix : String(request.method ?? '')
@@ -278,12 +309,13 @@ export function apply(ctx, config) {
     })
   })
 
-const endpoints = {
+  const endpoints = {
     list: {
       handle: async (payload) => {
         const view = payload?.view === 'archived' || payload?.view === 'deleted' ? payload.view : 'all'
         try {
-          const value = await listRows(ctx, { view, manifest, titleCache, config, logger, purgeTracker })
+          const { titleFetchLimit } = readConfig(config)
+          const value = await listRows(ctx, { view, manifest, titleCache, titleFetchLimit, logger, purgeTracker })
           return { ok: true, value: { view, ...value } }
         } catch (error) {
           logger?.warn?.(`[dsh-session-manager] list failed: ${error?.message ?? error}`)
@@ -314,7 +346,7 @@ const endpoints = {
         // Distinguishable failure (audit P5): without a readable corpus every
         // id would otherwise be reported as 'session-not-found'.
         if (!loaded.ok) return fail(loaded.error, 'the host session corpus is unavailable')
-        const value = await softDeleteSessions(ctx, ids, { headers: loaded.headers, manifest, titleCache, logger, purgeTracker }, { dshHome })
+        const value = await softDeleteSessions(ctx, ids, { headers: loaded.headers, manifest, titleCache, logger }, { dshHome })
         return { ok: true, value }
       }, logger),
     },
@@ -335,15 +367,7 @@ const endpoints = {
       }, logger),
     },
     config: {
-      handle: async () => ({
-        ok: true,
-        value: {
-          confirmPurge: config.confirmPurge === true,
-          autoRefresh: config.autoRefresh === true,
-          maxBatchSize: config.maxBatchSize,
-          titleFetchLimit: config.titleFetchLimit,
-        },
-      }),
+      handle: async () => ({ ok: true, value: readConfig(config) }),
     },
   }
 

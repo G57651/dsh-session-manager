@@ -31,7 +31,6 @@ const headers = {
   'session-ccc': { version: 4, id: 'session-ccc', createdAt: NOW - 3_000, cwd: '/tmp/proj', isSeeded: false },
 }
 const titles = { 'session-aaa': 'AAA 会话' }
-let unsafeLocate = false
 
 const workspace = { archived: new Set(['session-ccc']), stopped: [] }
 
@@ -55,11 +54,6 @@ const services = {
   sessionPersistence: {
     list: async () => sessionIds.map(id => ({ header: headers[id], revision: 'r1', sizeBytes: 2048, eventCount: 10 })),
     stat: async id => existsSync(join(sessionsRoot, id)) ? { header: headers[id], revision: 'r1', sizeBytes: 2048, eventCount: 10 } : undefined,
-    locate: (header) => {
-      if (unsafeLocate === true) return { kind: 'jsonl', path: '/etc/passwd/evil' }
-      if (existsSync(join(sessionsRoot, header.id))) return { kind: 'jsonl', path: join(sessionsRoot, header.id, 'session.v4.jsonl.zstd') }
-      throw new Error('not found')
-    },
   },
   workspaceRegistry: {
     get archivedSessionIds() { return [...workspace.archived] },
@@ -110,7 +104,9 @@ const config = host.Config({})
 
 host.apply(ctx, config)
 ok(captured.channel === '/dsh-session-manager', `channel is /dsh-session-manager, got ${captured.channel}`)
-ok(captured.options?.authority === 'loopback', 'rpc handle registered with authority loopback')
+// rc.1 contract: handle(channel, dispatch) takes exactly two arguments — the
+// former third `{ authority: 'loopback' }` argument was dropped with 0.1.4.
+ok(captured.options === undefined, 'rpc handle called with the two-argument rc.1 contract')
 const dispatch = captured.dispatch
 
 async function call(endpoint, payload) {
@@ -150,17 +146,17 @@ ok(archiveResults['session-aaa'].ok === true, 'aaa archived')
 ok(archiveResults['session-unknown'].ok === false && archiveResults['session-unknown'].error === 'session-not-found', 'unknown id reports session-not-found')
 ok(workspace.stopped.includes('session-aaa'), 'archive stops activity')
 
-// soft delete bbb — manifest written, hidden from all, visible in deleted view
+// delete bbb — trash manifest written, directory removed (0.1.4: delete means delete)
 result = await call('delete', { ids: ['session-bbb'] })
-ok(result.ok === true && result.value.results[0].ok === true, 'soft delete ok')
+ok(result.ok === true && result.value.results[0].ok === true && result.value.results[0].removedDirectory === true, 'delete ok and removes the directory')
 ok(existsSync(join(home, 'dsh-session-manager-deleted.json')), 'manifest file written')
+ok(!existsSync(join(sessionsRoot, 'session-bbb')), 'delete removes the session directory from disk')
 result = await call('list', { view: 'all' })
 ok(result.value.rows.every(row => row.id !== 'session-bbb'), 'deleted row hidden from all view')
 result = await call('list', { view: 'deleted' })
 ok(result.value.rows.length === 1 && result.value.rows[0].id === 'session-bbb', 'deleted view lists bbb')
-ok(result.value.rows[0].wasArchived === false && result.value.rows[0].missing === false, 'bbb trash row carries wasArchived=false and exists on disk')
+ok(result.value.rows[0].wasArchived === false, 'bbb trash row carries wasArchived=false')
 ok(result.value.counts.all === 2 && result.value.counts.archived === 2 && result.value.counts.deleted === 1, 'deleted view still reports real all/archived counts')
-ok(existsSync(join(sessionsRoot, 'session-bbb')), 'soft delete keeps the session directory')
 
 // restore bbb
 result = await call('restore', { ids: ['session-bbb'] })
@@ -176,27 +172,30 @@ result = await call('delete', { ids: ['session-ccc'] })
 result = await call('restore', { ids: ['session-ccc'] })
 ok(workspace.archived.has('session-ccc'), 'ccc restored back to archived because it was archived before deletion')
 
-// purge: archive + rm directory + manifest cleanup
+// purge aaa — purge never depends on the host corpus (the ghost-row case)
+ok(existsSync(join(sessionsRoot, 'session-aaa')), 'aaa on disk before delete')
 result = await call('delete', { ids: ['session-aaa'] })
-ok(existsSync(join(sessionsRoot, 'session-aaa')), 'aaa on disk before purge')
+ok(!existsSync(join(sessionsRoot, 'session-aaa')), 'aaa directory removed by delete')
 result = await call('purge', { ids: ['session-aaa'] })
-ok(result.ok === true && result.value.results[0].ok === true, `purge ok, got ${JSON.stringify(result.value.results)}`)
-ok(!existsSync(join(sessionsRoot, 'session-aaa')), 'aaa session directory removed from disk')
+ok(result.ok === true && result.value.results[0].ok === true, `purge ok after delete, got ${JSON.stringify(result.value.results)}`)
+ok(!existsSync(join(sessionsRoot, 'session-aaa')), 'aaa session directory stays removed')
 result = await call('list', { view: 'deleted' })
-ok(result.value.rows.every(row => row.id !== 'session-aaa'), 'aaa dropped from trash manifest')
+ok(result.value.rows.every(row => row.id !== 'session-aaa'), 'aaa tombstone filtered from trash view')
 result = await call('list', { view: 'all' })
 ok(result.value.rows.every(row => row.id !== 'session-aaa'), 'purged id filtered from all view despite stale corpus entry')
 ok(result.value.counts.all === 2, `counts exclude the purged id, got all=${result.value.counts.all}`)
 
-// purge guard: locate() escaping the sessions root must be refused
-await call('delete', { ids: ['session-bbb'] })
-unsafeLocate = true
-result = await call('purge', { ids: ['session-bbb'] })
-unsafeLocate = false
-ok(result.value.results[0].ok === false && result.value.results[0].error === 'unsafe-path', 'purge refuses paths outside the sessions root')
-ok(existsSync(join(sessionsRoot, 'session-bbb')), 'bbb directory untouched by the refused purge')
+// path guards: rc.1 exposes no session locator, so the guard is module-internal —
+// unit-test the exported guards directly instead of driving them over RPC
+{
+  const manage = await import(new URL('../session-manage.js', import.meta.url).href)
+  ok(manage.isSessionDir(join(sessionsRoot, 'session-bbb'), sessionsRoot, 'session-bbb') === true, 'isSessionDir accepts the real on-disk layout')
+  ok(manage.isSessionDir('/etc', sessionsRoot, 'session-bbb') === false, 'isSessionDir refuses paths outside the sessions root')
+  ok(manage.isSessionDir(join(sessionsRoot, 'session-ccc'), sessionsRoot, 'session-bbb') === false, 'isSessionDir refuses basename mismatches')
+  ok(manage.encodeSegment('a/b~') === 'a~002Fb~007E' && manage.projectKey('/tmp/proj') === '--tmp-proj--', 'segment/key encoding matches the persistence format')
+}
 
-// purge of a header-less manifest entry just cleans the entry
+// purge of a header-less manifest entry just records the tombstone
 result = await call('purge', { ids: ['session-zzz-gone'] })
 ok(result.value.results[0].ok === true && result.value.results[0].freedBytes === 0, 'purge of missing session cleans the manifest entry')
 
@@ -208,7 +207,7 @@ ok(result.value.rows.find(row => row.id === 'session-bbb')?.title === 'BBB 新�
 
 // errors
 ok((await dispatch('nope', {})).ok === false, 'unknown endpoint -> ok:false')
-ok((await dispatch('archive', {})).error === 'no-ids', 'empty batch -> no-ids')
+ok((await dispatch('archive', {})).error.code === 'no-ids', 'empty batch -> no-ids (contract failure object)')
 {
   const mixed = await dispatch('archive', { ids: ['a', 42] })
   ok(mixed.ok === true && mixed.value.results[0].id === 'a' && mixed.value.results[0].error === 'session-not-found', 'non-string ids filtered; unknown remainder reports per-id session-not-found')
@@ -218,7 +217,7 @@ ok((await dispatch('archive', {})).error === 'no-ids', 'empty batch -> no-ids')
   const ctx2 = { ...ctx, connection: { rpc: { handle: (channel, dispatch2) => { captured.second = dispatch2; return () => {} } } } }
   host.apply(ctx2, strictConfig)
   const second = captured.second
-  ok((await second('archive', { ids: ['session-aaa', 'session-bbb'] })).error === 'too-many-ids', 'batch above maxBatchSize rejected')
+  ok((await second('archive', { ids: ['session-aaa', 'session-bbb'] })).error.code === 'too-many-ids', 'batch above maxBatchSize rejected')
 }
 
 // direct webServer fallback registers a route when the connection seam refuses

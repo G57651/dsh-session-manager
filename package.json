@@ -1,6 +1,6 @@
 {
   "name": "@g57651/dsh-session-manager",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Web 侧边栏会话管理面板：全部 / 已归档 / 已删除视图、刷新、批量管理（归档 / 取消归档 / 删除 / 恢复 / 彻底删除）。",
   "type": "module",
   "main": "./index.js",

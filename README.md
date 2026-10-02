@@ -111,6 +111,14 @@ node scripts/smoke-host.mjs     # host 半功能冒烟（隔离临时 $DSH_HOME�
 
 ## 变更记录
 
+### 0.1.5（重构版，对外行为与接口不变）
+
+- **修复 volatile 配置读取**（对照开发文档 §3.5「volatile 字段用 `.get()` 读取」）：0.1.4 起 4 个配置字段标了 `.volatile()`，但 host 半仍按普通值直读——schemastery 交给 `apply` 的是 `{ get() }` 稳定引用，导致 `confirmPurge === true` 恒为 false（**彻底删除确认框不再弹出**）、`autoRefresh` 恒为 false（自动刷新永不启用）、批量 `maxBatchSize` 上限失效、`titleFetchLimit` 经 `Math.max(0, 引用)` 得 NaN（冷会话标题永不补拉）。现在每次 RPC 操作前经 `configValue` / `readConfig` 快照解析（与 one-click-restart 同一套模式），volatile 变更无需重挂载即可在下次请求生效。
+- **修复回退直连路由的 413 分支**：`readRequestBody(req)` 漏传 `res`，超限请求注释中描述的「立即以 413 终止响应」永远不会执行；现已传入 `res`。
+- **消除死代码**：`softDeleteSessions` 的 `purge` 选项分支无任何调用方（永久删除由 `purgeSessions` → `removeSessionDir` 承担），移除。
+- **消除重复**：`archiveSessions` / `unarchiveSessions` 合并为共享的 `mutateArchiveState`；`withBatch` 改为常规 async 并去掉多余的 `Promise.resolve` 包装。
+- host/client 两半的 RPC 契约、端点、错误码、配置字段与默认值全部不变。
+
 ### 0.1.3
 
 - **package.json**：`version` 0.1.2 → 0.1.3，声明兼容 DeepSeek Harness 0.2.0-rc.1；`engines.node` 采用仓库收紧值 `^22.19 || >=24`（0.1.2 tarball 里是 `>=22`，advisory 字段，无运行时影响）。

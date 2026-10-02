@@ -414,9 +414,10 @@ async function fillTitles(ctx, titleCache, ids, logger) {
 /**
  * Build display rows for one view.
  * @param view 'all' | 'archived' | 'deleted'
+ * @param titleFetchLimit resolved config value: cold sessions whose titles are folded per request
  * @returns rows for the view plus all-three-view counts for the tab labels.
  */
-export async function listRows(ctx, { view, manifest, titleCache, config, logger, purgeTracker }) {
+export async function listRows(ctx, { view, manifest, titleCache, titleFetchLimit, logger, purgeTracker }) {
   const [controllerProbe, queryProbe, persistenceProbe, manifestItems] = await Promise.all([
     probeService(ctx, 'sessionController', controller => controller.list({}), logger),
     probeService(ctx, 'sessionQuery', query => query.listSessions(), logger),
@@ -467,7 +468,7 @@ export async function listRows(ctx, { view, manifest, titleCache, config, logger
   }
   const missingTitles = [...ids].filter(id => needsTitle(id) && !isPurged(id))
   if (missingTitles.length > 0) {
-    await fillTitles(ctx, titleCache, missingTitles.slice(0, Math.max(0, config.titleFetchLimit)), logger)
+    await fillTitles(ctx, titleCache, missingTitles.slice(0, Math.max(0, titleFetchLimit)), logger)
   }
 
   // Purged records stay in the manifest as tombstones, so the tab count must
@@ -548,19 +549,25 @@ export async function loadHeaderMap(ctx, logger) {
 // Mutations
 // ---------------------------------------------------------------------------
 
-export async function archiveSessions(ctx, ids, logger) {
+/**
+ * Shared body of archive/unarchive: the only differences are the registry
+ * method, its optional argument, and the failure code prefix.
+ */
+async function mutateArchiveState(ctx, ids, logger, action) {
   const registry = ctx.get('workspaceRegistry')
-  if (registry === undefined || typeof registry.archiveSession !== 'function') {
+  const method = action === 'archive' ? 'archiveSession' : 'unarchiveSession'
+  if (registry === undefined || typeof registry[method] !== 'function') {
     return { unavailable: true }
   }
   const results = []
   for (const id of ids) {
     try {
-      await registry.archiveSession(id, { stopActivity: true })
+      if (action === 'archive') await registry.archiveSession(id, { stopActivity: true })
+      else await registry.unarchiveSession(id)
       results.push({ id, ok: true })
     } catch (error) {
-      const code = error?.name === 'WorkspaceUnknownSessionError' ? 'session-not-found' : 'archive-failed'
-      logger?.warn?.(`[dsh-session-manager] archive ${id} failed: ${error?.message ?? error}`)
+      const code = error?.name === 'WorkspaceUnknownSessionError' ? 'session-not-found' : `${action}-failed`
+      logger?.warn?.(`[dsh-session-manager] ${action} ${id} failed: ${error?.message ?? error}`)
       results.push({ id, ok: false, error: code })
     }
   }
@@ -570,26 +577,12 @@ export async function archiveSessions(ctx, ids, logger) {
   }
 }
 
-export async function unarchiveSessions(ctx, ids, logger) {
-  const registry = ctx.get('workspaceRegistry')
-  if (registry === undefined || typeof registry.unarchiveSession !== 'function') {
-    return { unavailable: true }
-  }
-  const results = []
-  for (const id of ids) {
-    try {
-      await registry.unarchiveSession(id)
-      results.push({ id, ok: true })
-    } catch (error) {
-      const code = error?.name === 'WorkspaceUnknownSessionError' ? 'session-not-found' : 'unarchive-failed'
-      logger?.warn?.(`[dsh-session-manager] unarchive ${id} failed: ${error?.message ?? error}`)
-      results.push({ id, ok: false, error: code })
-    }
-  }
-  return {
-    results,
-    archivedSessionIds: Array.isArray(registry.archivedSessionIds) ? [...registry.archivedSessionIds] : undefined,
-  }
+export function archiveSessions(ctx, ids, logger) {
+  return mutateArchiveState(ctx, ids, logger, 'archive')
+}
+
+export function unarchiveSessions(ctx, ids, logger) {
+  return mutateArchiveState(ctx, ids, logger, 'unarchive')
 }
 
 /**
@@ -604,11 +597,11 @@ export async function unarchiveSessions(ctx, ids, logger) {
  *
  * The manifest entry is written BEFORE the directory is removed, so a failed
  * manifest write aborts the delete instead of losing the only record of what
- * was removed.
+ * was removed. (Permanent removal is `purgeSessions` → `removeSessionDir`;
+ * this function always keeps the trash entry restoreable.)
  */
-export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCache, logger, purgeTracker }, options = {}) {
+export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCache, logger }, options = {}) {
   const sessionsRoot = resolve(join(resolve(options.dshHome ?? '.'), 'sessions'))
-  const purge = options.purge === true
   const archivedSet = await archivedSessionIdSet(ctx, logger)
   const results = []
   for (const id of ids) {
@@ -637,11 +630,6 @@ export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCac
         results.push({ id, ok: false, error: result?.error ?? 'workspace-unavailable' })
         continue
       }
-    }
-
-    if (purge) {
-      results.push(await removeSessionDir(ctx, id, { manifest, sessionsRoot, titleCache, logger, purgeTracker }))
-      continue
     }
 
     const located = await locateSessionDir(sessionsRoot, id)
