@@ -596,6 +596,11 @@ window.__ModuleLoader__.load({
 		  const degraded = sources !== null && sources.available !== true
 
 		  useEffect(() => { controller.ensureLoaded() }, [controller])
+		  // Style self-heal: apply() injects the stylesheet once per page, but a
+		  // page that booted through a failed plugin bundle can end up without
+		  // the tag. Re-assert it on every panel mount (idempotent: one
+		  // getElementById when present) so the panel never renders unstyled.
+		  useEffect(() => { ensureStyle(cssText) }, [])
 
 		  const tabs = VIEWS.map(name => ({
 		    value: name,
