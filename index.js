@@ -3,13 +3,20 @@
 // A cordis function plugin that serves the /dsh-session-manager RPC channel
 // consumed by the web client half (client.js):
 //
-//   list      { view: 'all' | 'archived' | 'deleted' } -> rows + view counts
-//   archive   { ids: SessionId[] }                     -> per-id results
-//   unarchive { ids: SessionId[] }                     -> per-id results
-//   delete    { ids: SessionId[] }  (trash + rm dir)   -> per-id results
-//   restore   { ids: SessionId[] }                     -> per-id results
-//   purge     { ids: SessionId[] }  (rm session dirs)  -> per-id results
-//   config    {}                                       -> client-facing config
+//   list          { view: 'all' | 'archived' | 'deleted' } -> rows + view counts
+//   archive       { ids: SessionId[] }                     -> per-id results
+//   unarchive     { ids: SessionId[] }                     -> per-id results
+//   delete        { ids: SessionId[] }  (trash + rollback + rm dir) -> per-id results
+//   restore       { ids: SessionId[] }                     -> per-id results
+//   purge         { ids: SessionId[] }  (rollback + rm session dirs) -> per-id results
+//   config        {}                                       -> client-facing config
+//
+//   -- resource lifecycle (v0.2.0) --
+//   changes       { id, limit? }        -> the session's change journal tail
+//   resources     { id }                -> baseline + journal-derived resource view
+//   cleanupStatus { ids }               -> per-id cleanup state machine summary
+//   cleanup       { ids, mode }         -> 'rollback-only' | 'resume' | 'full'
+//   track         { ids }               -> run one diff pass now (ops/debug)
 //
 // Every handler returns `{ ok: true, value }` or `{ ok: false, error }`;
 // batch endpoints take a single `ids` array so one RPC covers both the
@@ -35,6 +42,7 @@ import {
   softDeleteSessions,
   unarchiveSessions,
 } from './session-manage.js'
+import { createSessionResourceManager } from './lifecycle/manager.js'
 
 export const name = 'dsh-session-manager'
 // The endpoints resolve their services lazily via `ctx.get` at call time, but
@@ -53,18 +61,37 @@ export const CHANNEL = '/dsh-session-manager'
  * @property {boolean} autoRefresh Refresh the list on live session events (client-side behavior).
  * @property {number} maxBatchSize Upper bound of ids accepted per batch request.
  * @property {number} titleFetchLimit Cold sessions whose titles are folded per list request.
+ * @property {boolean} trackingEnabled Master switch for resource-lifecycle tracking.
+ * @property {boolean} autoCleanup Run resource rollback on delete/purge (tracking must be on).
+ * @property {boolean} autoResume Resume unfinished cleanups after a restart.
+ * @property {number} trackingPollMs Periodic workspace diff; 0 disables (event-driven + final diff only).
+ * @property {number} trackingMaxFiles Baseline/diff walk cap per session workspace.
+ * @property {number} trackingMaxDepth Baseline/diff depth cap per session workspace.
+ * @property {number} trackingMaxSnapshotBytes Per-file before-content snapshot cap.
+ * @property {string[]} trackingExclude Directory names excluded from tracking walks.
+ * @property {string} conflictMode 'safe' skips conflicted resources; 'force' overwrites them.
  */
 
 // `.volatile()` (vendor/schemastery/src/index.ts:480-482): changing one of these
 // commits into the running fiber and dispatches `loader/volatile-update`
 // (vendor/loader/src/index.ts:26-34) instead of remounting the plugin, which
 // would drop the in-flight manifest/title-cache state and re-register the RPC
-// channel. All four are pure tuning knobs, so a remount is never warranted.
+// channel. All fields are pure tuning knobs, so a remount is never warranted.
 export const Config = Schema.object({
   confirmPurge: Schema.boolean().default(true).volatile(),
   autoRefresh: Schema.boolean().default(true).volatile(),
   maxBatchSize: Schema.number().default(200).volatile(),
   titleFetchLimit: Schema.number().default(300).volatile(),
+  trackingEnabled: Schema.boolean().default(true).volatile(),
+  autoCleanup: Schema.boolean().default(true).volatile(),
+  autoResume: Schema.boolean().default(true).volatile(),
+  trackingPollMs: Schema.number().default(0).volatile(),
+  trackingIdleWindowMs: Schema.number().default(5 * 60 * 1000).volatile(),
+  trackingMaxFiles: Schema.number().default(5000).volatile(),
+  trackingMaxDepth: Schema.number().default(12).volatile(),
+  trackingMaxSnapshotBytes: Schema.number().default(8 * 1024 * 1024).volatile(),
+  trackingExclude: Schema.array(Schema.string()).default([]).volatile(),
+  conflictMode: Schema.union(['safe', 'force']).default('safe').volatile(),
 })
 
 /**
@@ -103,6 +130,16 @@ function readConfig(config) {
     autoRefresh: configValue(config.autoRefresh) === true,
     maxBatchSize: configValue(config.maxBatchSize),
     titleFetchLimit: configValue(config.titleFetchLimit),
+    trackingEnabled: configValue(config.trackingEnabled) !== false,
+    autoCleanup: configValue(config.autoCleanup) !== false,
+    autoResume: configValue(config.autoResume) !== false,
+    trackingPollMs: configValue(config.trackingPollMs),
+    trackingIdleWindowMs: configValue(config.trackingIdleWindowMs),
+    trackingMaxFiles: configValue(config.trackingMaxFiles),
+    trackingMaxDepth: configValue(config.trackingMaxDepth),
+    trackingMaxSnapshotBytes: configValue(config.trackingMaxSnapshotBytes),
+    trackingExclude: configValue(config.trackingExclude),
+    conflictMode: configValue(config.conflictMode),
   }
 }
 
@@ -296,18 +333,70 @@ export function apply(ctx, config) {
   const manifest = createManifestStore(join(dshHome, 'dsh-session-manager-deleted.json'), logger)
   const titleCache = createTitleCache(join(dshHome, 'dsh-session-manager-titles.json'), logger)
   const purgeTracker = createPurgeTracker()
+  const resourceManager = createSessionResourceManager({
+    dshHome,
+    ctx,
+    getConfig: () => readConfig(config),
+    logger,
+  })
 
   // Live sessions announce titles and renames through the session/title
   // session-event; fold them into the cache so cold rows stay current.
+  // Every other session-event feeds the resource lifecycle: tool/call carries
+  // the command context (env mutations, spawns, download intents), tool/result
+  // schedules the debounced workspace diff (requirement §六).
   ctx.on('session/event', (session, event) => {
-    if (event?.type !== 'session/title') return
+    if (event?.type === 'session/title') {
+      const id = session?.id
+      if (typeof id !== 'string' || id === '') return
+      titleCache.set(id, {
+        title: typeof event.data?.title === 'string' && event.data.title !== '' ? event.data.title : null,
+        updatedAt: Number.isFinite(event?.time) ? event.time : Date.now(),
+      })
+      return
+    }
     const id = session?.id
     if (typeof id !== 'string' || id === '') return
-    titleCache.set(id, {
-      title: typeof event.data?.title === 'string' && event.data.title !== '' ? event.data.title : null,
-      updatedAt: Number.isFinite(event?.time) ? event.time : Date.now(),
-    })
+    void resourceManager.observeEvent(id, event)
   })
+
+  // Crash recovery: finish cleanups an earlier process left unfinished
+  // (requirement §八). Fire-and-forget — a resume failure must not block boot.
+  void resourceManager.bootstrap().then(resumed => {
+    if (resumed.length > 0) logger?.info?.(`[dsh-session-manager] resumed ${resumed.length} unfinished cleanup/resume task(s)`)
+  })
+
+  // Optional periodic sweep (requirement §六 step 3): event-driven diffs plus
+  // the pre-removal final diff already cover the common cases; the poll is
+  // for deployments that mutate workspaces outside any observable event.
+  ctx.effect(() => {
+    let pollTimer
+    const arm = () => {
+      const { trackingPollMs } = readConfig(config)
+      const interval = Number(trackingPollMs)
+      if (!Number.isFinite(interval) || interval <= 0) return
+      pollTimer = setInterval(() => {
+        void sweepAllSessions()
+      }, Math.max(1000, interval))
+      if (typeof pollTimer.unref === 'function') pollTimer.unref()
+    }
+    async function sweepAllSessions() {
+      const query = ctx.get('sessionQuery')
+      if (query === undefined || typeof query.listSessions !== 'function') return
+      try {
+        const records = await query.listSessions()
+        for (const record of records ?? []) {
+          const id = String(record?.header?.id)
+          if (id === '') continue
+          await resourceManager.diffSession(id).catch(() => {})
+        }
+      } catch { /* sweep is best-effort by definition */ }
+    }
+    arm()
+    return () => {
+      if (pollTimer !== undefined) clearInterval(pollTimer)
+    }
+  }, 'dsh-session-manager: tracking poll (when configured)')
 
   const endpoints = {
     list: {
@@ -316,6 +405,10 @@ export function apply(ctx, config) {
         try {
           const { titleFetchLimit } = readConfig(config)
           const value = await listRows(ctx, { view, manifest, titleCache, titleFetchLimit, logger, purgeTracker })
+          // annotate rows with lifecycle tracking state (additive, old clients ignore it)
+          await Promise.all(value.rows.map(async row => {
+            row.tracked = await resourceManager.isTracked(row.id).catch(() => false)
+          }))
           return { ok: true, value: { view, ...value } }
         } catch (error) {
           logger?.warn?.(`[dsh-session-manager] list failed: ${error?.message ?? error}`)
@@ -346,14 +439,14 @@ export function apply(ctx, config) {
         // Distinguishable failure (audit P5): without a readable corpus every
         // id would otherwise be reported as 'session-not-found'.
         if (!loaded.ok) return fail(loaded.error, 'the host session corpus is unavailable')
-        const value = await softDeleteSessions(ctx, ids, { headers: loaded.headers, manifest, titleCache, logger }, { dshHome })
+        const value = await softDeleteSessions(ctx, ids, { headers: loaded.headers, manifest, titleCache, logger }, { dshHome, resourceManager })
         return { ok: true, value }
       }, logger),
     },
     restore: {
       audit: true,
       handle: payload => withBatch(config, payload, async (ids) => {
-        const value = await restoreSessions(ctx, ids, { manifest, titleCache, logger })
+        const value = await restoreSessions(ctx, ids, { manifest, titleCache, logger, resourceManager })
         return { ok: true, value }
       }, logger),
     },
@@ -362,8 +455,71 @@ export function apply(ctx, config) {
       handle: payload => withBatch(config, payload, async (ids) => {
         // No corpus lookup: a purged session is frequently absent from
         // sessionQuery already, and its directory still has to go (audit P2).
-        const value = await purgeSessions(ctx, ids, { manifest, dshHome, titleCache, logger, purgeTracker })
+        const value = await purgeSessions(ctx, ids, { manifest, dshHome, titleCache, logger, purgeTracker, resourceManager })
         return { ok: true, value }
+      }, logger),
+    },
+    // --- resource lifecycle endpoints (v0.2.0) ------------------------------
+    changes: {
+      handle: async (payload) => {
+        const id = typeof payload?.id === 'string' ? payload.id : ''
+        if (id === '') return fail('no-ids', 'a single session id is required')
+        const limit = Number(payload?.limit)
+        const value = await resourceManager.getChanges(id, { limit: Number.isFinite(limit) ? limit : 500 })
+        return { ok: true, value }
+      },
+    },
+    resources: {
+      handle: async (payload) => {
+        const id = typeof payload?.id === 'string' ? payload.id : ''
+        if (id === '') return fail('no-ids', 'a single session id is required')
+        try {
+          const value = await resourceManager.getResources(id)
+          return { ok: true, value }
+        } catch (error) {
+          return fail('resources-failed', error?.message ?? 'resources-failed')
+        }
+      },
+    },
+    cleanupStatus: {
+      handle: async (payload) => {
+        const ids = Array.isArray(payload?.ids) ? payload.ids.filter(id => typeof id === 'string' && id !== '')
+          : typeof payload?.id === 'string' && payload.id !== '' ? [payload.id] : []
+        if (ids.length === 0) return fail('no-ids', 'no session ids were supplied')
+        const results = await Promise.all(ids.map(id => resourceManager.getCleanupStatus(id).catch(error => ({
+          sessionId: id, tracked: false, legacy: true, cleanup: null, error: error?.message ?? 'status-failed',
+        }))))
+        return { ok: true, value: { results } }
+      },
+    },
+    cleanup: {
+      audit: true,
+      handle: payload => withBatch(config, payload, async (ids) => {
+        const mode = payload?.mode === 'full' || payload?.mode === 'resume' ? payload.mode : 'rollback-only'
+        const results = []
+        for (const id of ids) {
+          try {
+            const outcome = await resourceManager.cleanupSession(id, { mode })
+            results.push({ id, ok: outcome.ok !== false, ...outcome })
+          } catch (error) {
+            logger?.warn?.(`[dsh-session-manager] cleanup ${id} failed: ${error?.message ?? error}`)
+            results.push({ id, ok: false, error: error?.message ?? 'cleanup-failed' })
+          }
+        }
+        return { ok: true, value: { results } }
+      }, logger),
+    },
+    track: {
+      handle: payload => withBatch(config, payload, async (ids) => {
+        const results = []
+        for (const id of ids) {
+          try {
+            results.push({ id, ok: true, ...(await resourceManager.diffSession(id)) })
+          } catch (error) {
+            results.push({ id, ok: false, error: error?.message ?? 'diff-failed' })
+          }
+        }
+        return { ok: true, value: { results } }
       }, logger),
     },
     config: {
@@ -405,5 +561,6 @@ export function apply(ctx, config) {
   ctx.effect(() => async () => {
     await manifest.flush()
     await titleCache.flush()
+    resourceManager.dispose()
   }, 'dsh-session-manager: flush stores')
 }
