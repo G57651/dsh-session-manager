@@ -42,10 +42,29 @@ function createApi(ctx) {
   }
 }
 
+// Accepts both the rc.1 failure shape { code, message, details }
+// (packages/client/connection/src/rpc.ts:18-28) and the bare string the
+// 0.1.x host returned. `message` is preferred over `code` because it is
+// the human-readable half; `details` is only kept for logging, never
+// rendered, since it is arbitrary JSON.
 function formatError(error) {
-  if (typeof error === 'string') return error
-  if (error !== null && typeof error === 'object') return error.message ?? error.code ?? 'internal'
+  if (typeof error === 'string' && error !== '') return error
+  if (error !== null && typeof error === 'object') {
+    const message = error.message ?? error.code
+    if (typeof message === 'string' && message !== '') return message
+    if (typeof error.code === 'string' && error.code !== '') return error.code
+  }
   return 'internal'
+}
+
+/** One-line diagnostic for the browser console; never shown in the panel. */
+function describeError(error) {
+  if (error !== null && typeof error === 'object') {
+    const code = typeof error.code === 'string' ? error.code : 'unknown'
+    const details = error.details === undefined ? '' : ` details=${JSON.stringify(error.details)}`
+    return `${code}${details}`
+  }
+  return String(error)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +84,9 @@ function createManagerStore() {
       selectMode: false,
       selectedIds: [],
       confirmPurgeIds: null,
-      config: { confirmPurge: true, autoRefresh: true, maxBatchSize: 200 },
+      sources: null,
+      noticeDismissed: false,
+      config: { confirmPurge: true, autoRefresh: true, maxBatchSize: 200, titleFetchLimit: 300 },
     }),
     actions: {
       setConfig: (draft, config) => { draft.config = config },
@@ -75,9 +96,13 @@ function createManagerStore() {
         draft.selectedIds = []
         draft.loading = true
       },
-      setRows: (draft, rows, counts) => {
+      setRows: (draft, rows, counts, sources) => {
         draft.rows = rows
         draft.counts = counts
+        // Degraded host corpora (audit P5): the host reports which
+        // services answered, so a partial list can say so instead of
+        // silently looking complete.
+        draft.sources = sources
         draft.loading = false
         draft.loaded = true
         draft.error = null
@@ -91,7 +116,13 @@ function createManagerStore() {
         const row = draft.rows.find(candidate => candidate.id === id)
         if (row !== undefined) Object.assign(row, patch)
       },
-      setNotice: (draft, notice) => { draft.notice = notice },
+      setNotice: (draft, notice) => {
+        // A freshly raised notice is never pre-dismissed, whatever the
+        // user did to the previous one.
+        draft.noticeDismissed = false
+        draft.notice = notice
+      },
+      dismissNotice: (draft) => { draft.noticeDismissed = true },
       enterSelect: (draft) => { draft.selectMode = true },
       exitSelect: (draft) => {
         draft.selectMode = false
@@ -127,8 +158,9 @@ function createController({ ctx, api, instance }) {
     const result = await api.list(target)
     if (seq !== loadSeq) return
     if (result?.ok === true) {
-      instance.actions.setRows(result.value?.rows ?? [], result.value?.counts ?? { all: 0, archived: 0, deleted: 0 })
+      instance.actions.setRows(result.value?.rows ?? [], result.value?.counts ?? { all: 0, archived: 0, deleted: 0 }, result.value?.sources ?? null)
     } else {
+      console.warn('[dsh-session-manager] list failed:', describeError(result?.error), result?.error?.details ?? '')
       instance.actions.setError(formatError(result?.error))
     }
   }
@@ -162,6 +194,7 @@ function createController({ ctx, api, instance }) {
   async function runOp(name, ids, t) {
     const result = await api[name](ids)
     if (result?.ok !== true) {
+      console.warn(`[dsh-session-manager] ${name} failed:`, describeError(result?.error), result?.error?.details ?? '')
       instance.actions.setNotice({ tone: 'error', text: t('error.request', { reason: formatError(result?.error) }) })
       return false
     }
@@ -169,10 +202,20 @@ function createController({ ctx, api, instance }) {
     instance.actions.selectAll([])
     await load()
     const failures = (result.value?.results ?? []).filter(entry => entry?.ok !== true)
+    if (failures.length === 0 && (name === 'deleteSoft' || name === 'purge')) {
+      // P3 caveat: the directory is gone, but rc.1 has no API to
+      // invalidate the host corpus, so the official sidebar's cached
+      // list can keep showing the row until the app restarts.
+      instance.actions.setNotice({ tone: 'info', text: t('notice.stale') })
+    }
     if (failures.length > 0) {
+      const first = failures[0]
+      console.warn(`[dsh-session-manager] ${name}: ${failures.length} of ${ids.length} failed:`, describeError(first?.error), first?.error?.details ?? '')
       instance.actions.setNotice({
         tone: 'error',
-        text: t('notice.partial', { n: failures.length, reason: formatError(failures[0]?.error) }),
+        // The host has no per-id message field today, but read one when it
+        // exists rather than always printing the error code.
+        text: t('notice.partial', { n: failures.length, reason: formatError(first?.error?.message ?? first?.error) }),
       })
     }
     return true
@@ -405,8 +448,16 @@ function SessionManagerPage(props) {
   const selectedIds = useStore(s => s.selectedIds)
   const confirmPurgeIds = useStore(s => s.confirmPurgeIds)
   const config = useStore(s => s.config)
+  const sources = useStore(s => s.sources)
+  const noticeDismissed = useStore(s => s.noticeDismissed)
+  const degraded = sources !== null && sources.available !== true
 
   useEffect(() => { controller.ensureLoaded() }, [controller])
+  // Style self-heal: apply() injects the stylesheet once per page, but a
+  // page that booted through a failed plugin bundle can end up without
+  // the tag. Re-assert it on every panel mount (idempotent: one
+  // getElementById when present) so the panel never renders unstyled.
+  useEffect(() => { ensureStyle(cssText) }, [])
 
   const tabs = VIEWS.map(name => ({
     value: name,
@@ -432,10 +483,14 @@ function SessionManagerPage(props) {
         label: t('view.label'),
       }),
     ),
-    notice !== null && h('div', { className: cx('dsm-notice', notice.tone === 'error' ? 'dsm-noticeError' : 'dsm-noticeInfo'), role: 'status' },
+    notice !== null && !noticeDismissed && h('div', { className: cx('dsm-notice', notice.tone === 'error' ? 'dsm-noticeError' : 'dsm-noticeInfo'), role: 'status' },
       h('span', null, notice.text),
-      h('button', { className: 'dsm-noticeClose', onClick: () => actions.setNotice(null), 'aria-label': t('action.dismiss') }, '×'),
+      h('button', { className: 'dsm-noticeClose', onClick: () => actions.dismissNotice(), 'aria-label': t('action.dismiss') }, '×'),
     ),
+    // rc.1 keeps no corpus-invalidation API, so a session deleted on
+    // disk can still be listed by the official sidebar until the next
+    // restart (audit P3). Said once here, not per row.
+    degraded && h('div', { className: 'dsm-notice dsm-noticeInfo', role: 'status' }, h('span', null, t('notice.degraded'))),
     error !== null
       ? h('div', { className: 'dsm-stateBox' },
           h('p', { className: 'dsm-stateTitle' }, t('error.list')),

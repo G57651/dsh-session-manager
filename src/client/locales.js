@@ -52,6 +52,8 @@ const zh = {  'panel': '会话管理',
   'error.generic': '操作失败',
   'error.request': '请求失败（{reason}）',
   'notice.partial': '{n} 项操作失败（{reason}）',
+  'notice.degraded': '部分会话服务不可用，列表可能不完整。',
+  'notice.stale': '已删除的会话可能仍出现在官方侧栏，重启后消失。',
   'purge.title': '彻底删除 {n} 个会话？',
   'purge.description': '所选会话的全部记录将从磁盘移除，此操作无法恢复。',
   'purge.confirm': '彻底删除',
@@ -107,10 +109,13 @@ const en = {
   'error.generic': 'The operation failed',
   'error.request': 'Request failed ({reason})',
   'notice.partial': '{n} item(s) failed ({reason})',
+  'notice.degraded': 'Some session services are unavailable; this list may be incomplete.',
+  'notice.stale': 'Deleted sessions can still show in the official sidebar until a restart.',
   'purge.title': 'Delete {n} session(s) forever?',
   'purge.description': 'Their records will be removed from disk. This cannot be undone.',
   'purge.confirm': 'Delete forever',
   'purge.more': 'and {n} more',
 }
+
 
 export { zh, en }
