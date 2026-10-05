@@ -110,6 +110,8 @@ host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返
 | `cleanupStatus` | `{ ids }` | 每会话清理状态机快照（冲突 / 失败明细） | **0.2.0** |
 | `cleanup` | `{ ids, mode }` | `rollback-only`（回滚资源保留会话）/ `resume` / `full` | **0.2.0** |
 | `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试） | **0.2.0** |
+| `openResource` | `{ id, path, app? }` | 在文件管理器中显示（默认）或用指定应用打开会话资源；路径仅限该会话工作区内 | **0.3.0** |
+| `listApplications` | `{ refresh? }` | 扫描本机已安装应用（macOS /Applications、Windows 开始菜单、Linux .desktop），供打开方式下拉 | **0.3.0** |
 
 `delete` / `purge` / `restore` 返回值新增可选 `cleanup` / `journalRemoved` 字段——旧客户端忽略即可。
 
@@ -236,9 +238,20 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 - 删除语义：官方层无删除 API。软删除 = 清单标记 + 原生归档隐藏（0.1.4 起会话目录同样被移除，恢复仅还原列表行、不还原磁盘数据）；彻底删除 = 资源回滚 + 停活动 + 移除会话目录 + 销毁 Journal（有 `locate()` 定位 + `$DSH_HOME/sessions` 路径守卫 + id 校验三重防护，拒绝越界路径）。
 - 幽灵行清理（v0.1.1 修复）：移除会话目录不触发拆卸，官方侧边栏拿不到移除事件——彻底删除后插件改为三步失效（逐工作区 `detachSession` → `unarchiveSession` → `api-session/removed` 转发），无需重启即消失。残留限制：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，同进程内重连（如刷新页面）可能重新拉到残留条目，进程重启后彻底清理。
 - 归档/删除无远程事件：这两个操作后列表由 RPC 返回值本地刷新；归档当前激活会话时原生 UI 会自动切走主面板（官方行为）。
-- client 半本版未改：资源视图（`resources` / `changes` / `cleanupStatus`）当前经 RPC 查询，尚未接入面板 UI。
+- **打开资源**的平台差异：macOS 用 `open -R` / `open -a`；Windows 用 `explorer /select`（定位）与 `start` 经 cmd 启动（参数先经 shell 元字符校验）；Linux 定位用 `xdg-open`、按应用打开用 `gtk-launch`。所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
 
 ## 变更记录
+
+### 0.3.0（资源打开：文件管理器 / 自选应用 + 弹窗显示修复）
+
+- **修复资源弹窗显示不全**：宿主 Modal 对话框固定 380px 宽且 `overflow: hidden`，0.2.x 的内容区 `min-width: 72vw` 与 `max-height: 56vh` 被直接裁掉。现在经 Modal 的 `className` 参数把对话框加宽到 `min(860px, 100%)`、内容区自适应滚动（遵循宿主"用 `max-height: 100%`"的约定），长路径换行显示。
+- **新增资源打开能力**（`lifecycle/opener.js` + RPC `openResource` / `listApplications`）：
+  - 单个资源：每行「打开」按钮——默认在本机文件管理器中**显示**（macOS `open -R` 定位 / Windows `explorer /select` / Linux `xdg-open` 父目录）；
+  - **打开方式自选**：弹窗内下拉列出自动扫描的本机应用（macOS 三处 Applications 目录、Windows 开始菜单 .lnk、Linux .desktop 的 Name=），选择后用该应用打开；
+  - **批量操作**：文件类资源带勾选框，勾选后「打开所选（N）」逐个发送打开请求；另有「打开工作区」一键定位会话工作目录；
+  - 安全：spawn 一律 argv 数组无 shell 拼接（Windows `start` 例外处先做 shell 元字符校验）；可打开路径严格限制在该会话基线 cwd 之内，越界 / 不存在 / 未跟踪会话分别报 `unsafe-path` / `resource-missing` / `untracked`；
+  - 环境变量与进程记录无文件可打开，不显示打开按钮。
+- 测试：`smoke-lifecycle.mjs` 163 项断言（新增 openResource 默认 / 指定应用 / 工作区根 / 越界 / 缺失 / 未跟踪 / 应用列表扫描与排序用例，opener 走 log 模式不弹真窗口）；client 渲染冒烟覆盖工具栏 / 下拉 / 勾选框。
 
 ### 0.2.3（资源视图只列会话产物）
 

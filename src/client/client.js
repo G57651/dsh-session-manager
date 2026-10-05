@@ -41,6 +41,8 @@ function createApi(ctx) {
     getConfig: () => call('config', {}),
     resources: id => call('resources', { id }),
     cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
+    openResource: (id, path, app) => call('openResource', { id, path, app }),
+    listApplications: () => call('listApplications', {}),
   }
 }
 
@@ -142,8 +144,27 @@ function createManagerStore() {
       },
       openConfirmPurge: (draft, ids) => { draft.confirmPurgeIds = ids },
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
-      // resource detail modal (0.2.x): one open detail at a time
-      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null } },
+      // resource detail modal (0.2.x): one open detail at a time; the modal
+      // owns its app-picker selection, scanned app list and batch selection
+      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, apps: [], app: '', selected: [], busy: false } },
+      setDetailApps: (draft, apps) => {
+        if (draft.detail !== null) draft.detail.apps = apps
+      },
+      setDetailApp: (draft, app) => {
+        if (draft.detail !== null) draft.detail.app = app
+      },
+      toggleDetailSelect: (draft, key) => {
+        if (draft.detail === null) return
+        draft.detail.selected = draft.detail.selected.includes(key)
+          ? draft.detail.selected.filter(candidate => candidate !== key)
+          : [...draft.detail.selected, key]
+      },
+      setDetailSelected: (draft, keys) => {
+        if (draft.detail !== null) draft.detail.selected = keys
+      },
+      setDetailBusy: (draft, busy) => {
+        if (draft.detail !== null) draft.detail.busy = busy === true
+      },
       setDetailData: (draft, data) => {
         if (draft.detail !== null && draft.detail.id === data?.sessionId) {
           draft.detail.loading = false
@@ -247,9 +268,10 @@ function createController({ ctx, api, instance }) {
   async function openResources(id) {
     const seq = ++detailSeq
     instance.actions.openDetail(id)
-    const [resources, status] = await Promise.all([
+    const [resources, status, applications] = await Promise.all([
       api.resources(id),
       api.cleanupStatus(id).catch(() => null),
+      api.listApplications().catch(() => null),
     ])
     if (seq !== detailSeq) return
     if (resources?.ok === true) {
@@ -260,6 +282,50 @@ function createController({ ctx, api, instance }) {
       return
     }
     if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
+    if (applications?.ok === true && Array.isArray(applications.value?.applications)) {
+      instance.actions.setDetailApps(applications.value.applications)
+    }
+  }
+
+  /** Open one resource: reveal in the file manager or launch the chosen app. */
+  async function openOne(sessionId, path, app) {
+    const result = await api.openResource(sessionId, path, app === '' ? undefined : app)
+    if (result?.ok !== true) {
+      const message = formatError(result?.error)
+      console.warn('[dsh-session-manager] openResource failed:', describeError(result?.error))
+      instance.actions.setNotice({ tone: 'error', text: t('res.openFailed', { reason: message }) })
+      return false
+    }
+    return true
+  }
+
+  /** Batch-open every selected resource; failures surface per-row. */
+  async function openSelected() {
+    const detail = instance.getSnapshot().detail
+    if (detail === null || detail.busy === true) return
+    const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
+    const targets = detail.selected.map(key => rowsByKey.get(key)).filter(row => row !== undefined)
+    if (targets.length === 0) return
+    instance.actions.setDetailBusy(true)
+    let failures = 0
+    for (const row of targets) {
+      const opened = await openOne(detail.id, row.identifier, detail.app)
+      if (opened !== true) failures += 1
+    }
+    instance.actions.setDetailBusy(false)
+    if (failures === 0) {
+      instance.actions.setNotice({ tone: 'info', text: t('res.batchOpened', { n: targets.length }) })
+      instance.actions.setDetailSelected([])
+    }
+  }
+
+  /** Reveal the session workspace itself in the file manager. */
+  async function openWorkspace() {
+    const detail = instance.getSnapshot().detail
+    if (detail === null) return
+    // '.' resolves host-side to the session workspace (guarded to the cwd);
+    // with an app selected the workspace opens in that app instead
+    await openOne(detail.id, '.', detail.app)
   }
 
   function dispose() {
@@ -269,8 +335,16 @@ function createController({ ctx, api, instance }) {
     }
   }
 
-  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, dispose }
+  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, openWorkspace, dispose }
 }
+
+/** Stable per-row key used by the modal's batch selection. */
+function rowKeyOf(row) {
+  return `${row.resourceType}:${row.identifier}`
+}
+
+/** Path-shaped resources can be opened/revealed; env vars and processes cannot. */
+const OPENABLE_TYPES = new Set(['file', 'configuration', 'download', 'directory', 'dependency'])
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -543,7 +617,7 @@ function statusPill(status, t) {
   })
 }
 
-function ResourcesModal({ detail, actions, t }) {
+function ResourcesModal({ detail, actions, controller, t }) {
   const data = detail.data
   const resources = data?.resources ?? []
   const groups = new Map()
@@ -552,15 +626,19 @@ function ResourcesModal({ detail, actions, t }) {
     if (groups.has(type) === false) groups.set(type, [])
     groups.get(type).push(row)
   }
+  const openableRows = resources.filter(row => OPENABLE_TYPES.has(row.resourceType))
   const cleanupState = detail.status?.cleanup?.state ?? (data?.tracked === false ? 'legacy' : 'none')
   const conflicts = Array.isArray(detail.status?.cleanup?.conflicts) ? detail.status.cleanup.conflicts : []
   const baseline = data?.baseline ?? null
+  const tracked = data?.tracked === true
 
   return h(Modal, {
     open: true,
     onClose: actions.closeDetail,
     title: t('res.title'),
     closeLabel: t('action.closeModal'),
+    className: 'dsm-resDialog',
+    contentClassName: 'dsm-resContent',
     footer: [h(Button, { key: 'close', variant: 'primary', size: 'sm', onClick: actions.closeDetail }, t('action.closeModal'))],
   },
     h('div', { className: 'dsm-resBody' },
@@ -577,27 +655,69 @@ function ResourcesModal({ detail, actions, t }) {
           t('res.conflicts', { n: conflicts.length })),
         data.tracked === false && h('p', { key: 'legacy', className: 'dsm-resHint' }, t('res.legacy')),
         data.tracked === true && resources.length === 0 && h('p', { key: 'empty', className: 'dsm-resHint' }, t('res.empty')),
+
+        // open toolbar: app picker (default = OS file manager reveal) + batch
+        tracked && openableRows.length > 0 && h('div', { key: 'toolbar', className: 'dsm-resToolbar' },
+          h('select', {
+            key: 'app',
+            className: 'dsm-resAppSelect',
+            value: detail.app,
+            onChange: event => actions.setDetailApp(event.target.value),
+            'aria-label': t('res.appLabel'),
+          },
+            h('option', { key: 'default', value: '' }, t('res.appDefault')),
+            detail.apps.length === 0 && h('option', { key: 'scanning', value: '', disabled: true }, t('res.appNone')),
+            detail.apps.map(name => h('option', { key: name, value: name }, name)),
+          ),
+          h(Button, { key: 'ws', variant: 'ghost', size: 'sm', disabled: detail.busy === true, onClick: () => void controller.openWorkspace() }, t('res.openWorkspace')),
+          h(Button, {
+            key: 'batch',
+            variant: 'ghost',
+            size: 'sm',
+            disabled: detail.selected.length === 0 || detail.busy === true,
+            onClick: () => void controller.openSelected(),
+          }, t('res.openSelected', { n: detail.selected.length })),
+        ),
+
         RES_GROUP_ORDER.map(type => {
           const rows = groups.get(type)
           if (rows === undefined || rows.length === 0) return null
+          const openable = OPENABLE_TYPES.has(type)
           return h('div', { key: type, className: 'dsm-resGroup' },
             h('div', { className: 'dsm-resGroupTitle' }, `${t(RES_GROUP_KEY[type])} · ${rows.length}`),
             h('div', { className: 'dsm-resGroupList' },
-              rows.map(row => h('div', { key: `${row.resourceType}:${row.identifier}`, className: 'dsm-resRow' },
-                h('div', { className: 'dsm-resMain' },
-                  h('div', { className: 'dsm-resId' }, row.identifier),
-                  h('div', { className: 'dsm-resExtra' }, [
-                    row.actions !== undefined && row.actions.length > 0 ? `${t('res.lastAction')}: ${row.actions.join(', ')}` : null,
-                    typeof row.url === 'string' ? row.url : null,
-                    row.before !== undefined && row.before !== null ? `v${row.before} → ${row.after ?? '—'}` : null,
-                  ].filter(Boolean).join(' · ')),
-                ),
-                h('div', { className: 'dsm-resPills' },
-                  ownershipPill(row.ownership, t),
-                  statusPill(row.status, t),
-                ),
-              )),
-            ),
+              rows.map(row => {
+                const key = rowKeyOf(row)
+                const selected = detail.selected.includes(key)
+                return h('div', { key, className: cx('dsm-resRow', openable === true && 'dsm-resRowOpenable', selected === true && 'dsm-resRowSelected') },
+                  openable === true && h('div', { className: 'dsm-resCheck' },
+                    h(Checkbox, {
+                      checked: selected,
+                      onChange: () => actions.toggleDetailSelect(key),
+                      label: t('res.select', { name: row.identifier }),
+                    })),
+                  h('div', { className: 'dsm-resMain' },
+                    h('div', { className: 'dsm-resId' }, row.identifier),
+                    h('div', { className: 'dsm-resExtra' }, [
+                      row.actions !== undefined && row.actions.length > 0 ? `${t('res.lastAction')}: ${row.actions.join(', ')}` : null,
+                      typeof row.url === 'string' ? row.url : null,
+                      row.before !== undefined && row.before !== null ? `v${row.before} → ${row.after ?? '—'}` : null,
+                    ].filter(Boolean).join(' · ')),
+                  ),
+                  h('div', { className: 'dsm-resPills' },
+                    ownershipPill(row.ownership, t),
+                    statusPill(row.status, t),
+                    openable === true && h(Button, {
+                      key: 'open',
+                      variant: 'ghost',
+                      size: 'sm',
+                      'aria-label': t('res.open'),
+                      disabled: detail.busy === true,
+                      onClick: () => void controller.openOne(detail.id, row.identifier, detail.app),
+                    }, t('res.open')),
+                  ),
+                )
+              })),
           )
         }),
       ],

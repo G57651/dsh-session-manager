@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		var __modules = {
 			"./styles.css.js": function (require, module, exports) {
-				module.exports = { cssText: "/* dsh-session-manager — client styles, injected as a style tag by apply().\n   Class prefix .dsm- avoids collisions with the host. Colors, borders, and\n   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and\n   dark follow the host theme automatically; no theme selectors live here. */\n\n.dsm-page {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  box-sizing: border-box;\n  height: 100%;\n  min-width: 0;\n  min-height: 0;\n  padding: 24px clamp(20px, 4vw, 44px) 40px;\n  overflow: hidden;\n}\n\n.dsm-head {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n\n.dsm-headRow {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.dsm-title {\n  margin: 0;\n  font-size: 20px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-headActions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.dsm-tabs {\n  width: min(460px, 100%);\n}\n\n.dsm-tabCount {\n  opacity: 0.65;\n}\n\n.dsm-list {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  border: 1px solid var(--dsw-alias-border-l1);\n  border-radius: var(--dsw-radius-md);\n  overflow-x: hidden;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-row {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  transition: background 120ms ease;\n}\n\n.dsm-row:last-child {\n  border-bottom: none;\n}\n\n.dsm-row:hover,\n.dsm-rowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-rowClickable {\n  cursor: pointer;\n}\n\n.dsm-checkCell {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n/* Keep the primitive checkbox's accessible label but hide its visible text:\n   the row title right next to it already says what this is. */\n.dsm-checkCell label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-rowMain {\n  display: flex;\n  flex: 1;\n  min-width: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.dsm-rowTitleLine {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-rowTitle {\n  overflow: hidden;\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowTitleMuted {\n  color: var(--dsw-alias-label-secondary);\n  font-weight: 400;\n}\n\n.dsm-pill {\n  flex: none;\n  padding: 1px 8px;\n  font-size: 11px;\n  line-height: 16px;\n  color: var(--dsw-alias-label-secondary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 999px;\n}\n\n.dsm-pillRunning {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-pillMissing {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-rowMeta {\n  overflow: hidden;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowActions {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 4px;\n  opacity: 0;\n  transition: opacity 120ms ease;\n}\n\n.dsm-row:hover .dsm-rowActions,\n.dsm-row:focus-within .dsm-rowActions {\n  opacity: 1;\n}\n\n.dsm-dangerButton.dsm-dangerButton {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-dangerFill.dsm-dangerFill {\n  background: var(--dsw-alias-state-error-primary);\n  color: var(--dsw-alias-bg-base);\n}\n\n.dsm-batchBar {\n  position: sticky;\n  bottom: 0;\n  z-index: 2;\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin-top: auto;\n  padding: 10px 14px;\n  background: var(--dsw-alias-bg-layer-1);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);\n}\n\n.dsm-batchCount {\n  flex: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-batchOps {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-stateBox {\n  display: flex;\n  flex: 1;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 56px 24px;\n  text-align: center;\n}\n\n.dsm-stateIcon {\n  color: var(--dsw-alias-label-tertiary);\n  opacity: 0.7;\n}\n\n.dsm-stateTitle {\n  margin: 0;\n  font-size: 14px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-stateHint {\n  margin: 0;\n  max-width: 420px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n\n.dsm-notice {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 8px 12px;\n  font-size: 12px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-noticeError {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-noticeInfo {\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-noticeClose {\n  flex: none;\n  padding: 0 4px;\n  font-size: 14px;\n  line-height: 1;\n  color: inherit;\n  background: none;\n  border: none;\n  cursor: pointer;\n}\n\n.dsm-purgeList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-purgeList li {\n  padding: 3px 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-skeletonRow {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 12px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n}\n\n.dsm-skeletonRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-skeletonBar {\n  height: 10px;\n  border-radius: 4px;\n  background: var(--dsw-alias-interactive-bg-hover);\n  animation: dsm-pulse 1.4s ease-in-out infinite;\n}\n\n.dsm-skeletonBarShort {\n  width: 40%;\n}\n\n@keyframes dsm-pulse {\n  0%,\n  100% {\n    opacity: 0.55;\n  }\n  50% {\n    opacity: 1;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-skeletonBar {\n    animation: none;\n  }\n\n  .dsm-row,\n  .dsm-rowActions {\n    transition: none;\n  }\n}\n\n/* --- resource detail modal (0.2.x) ---------------------------------------- */\n\n.dsm-resBody {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  max-height: 56vh;\n  overflow: auto;\n  min-width: min(560px, 72vw);\n}\n\n.dsm-resMetaLine {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: baseline;\n  gap: 4px 14px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resCwd {\n  overflow-wrap: anywhere;\n}\n\n.dsm-resConflicts {\n  padding: 8px 10px;\n  font-size: 12px;\n  color: var(--dsw-alias-state-error-primary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resGroup {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n}\n\n.dsm-resGroupTitle {\n  margin: 6px 0 2px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resGroupList {\n  display: flex;\n  flex-direction: column;\n}\n\n.dsm-resRow {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 5px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\n}\n\n.dsm-resRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-resMain {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.dsm-resId {\n  font-size: 13px;\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resExtra {\n  margin-top: 1px;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resPills {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-pillOwn {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-resHint {\n  margin: 0;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resHintError {\n  color: var(--dsw-alias-state-error-primary);\n}\n" };
+				module.exports = { cssText: "/* dsh-session-manager — client styles, injected as a style tag by apply().\n   Class prefix .dsm- avoids collisions with the host. Colors, borders, and\n   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and\n   dark follow the host theme automatically; no theme selectors live here. */\n\n.dsm-page {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  box-sizing: border-box;\n  height: 100%;\n  min-width: 0;\n  min-height: 0;\n  padding: 24px clamp(20px, 4vw, 44px) 40px;\n  overflow: hidden;\n}\n\n.dsm-head {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n\n.dsm-headRow {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.dsm-title {\n  margin: 0;\n  font-size: 20px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-headActions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.dsm-tabs {\n  width: min(460px, 100%);\n}\n\n.dsm-tabCount {\n  opacity: 0.65;\n}\n\n.dsm-list {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  border: 1px solid var(--dsw-alias-border-l1);\n  border-radius: var(--dsw-radius-md);\n  overflow-x: hidden;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-row {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  transition: background 120ms ease;\n}\n\n.dsm-row:last-child {\n  border-bottom: none;\n}\n\n.dsm-row:hover,\n.dsm-rowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-rowClickable {\n  cursor: pointer;\n}\n\n.dsm-checkCell {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n/* Keep the primitive checkbox's accessible label but hide its visible text:\n   the row title right next to it already says what this is. */\n.dsm-checkCell label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-rowMain {\n  display: flex;\n  flex: 1;\n  min-width: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.dsm-rowTitleLine {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-rowTitle {\n  overflow: hidden;\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowTitleMuted {\n  color: var(--dsw-alias-label-secondary);\n  font-weight: 400;\n}\n\n.dsm-pill {\n  flex: none;\n  padding: 1px 8px;\n  font-size: 11px;\n  line-height: 16px;\n  color: var(--dsw-alias-label-secondary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 999px;\n}\n\n.dsm-pillRunning {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-pillMissing {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-rowMeta {\n  overflow: hidden;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowActions {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 4px;\n  opacity: 0;\n  transition: opacity 120ms ease;\n}\n\n.dsm-row:hover .dsm-rowActions,\n.dsm-row:focus-within .dsm-rowActions {\n  opacity: 1;\n}\n\n.dsm-dangerButton.dsm-dangerButton {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-dangerFill.dsm-dangerFill {\n  background: var(--dsw-alias-state-error-primary);\n  color: var(--dsw-alias-bg-base);\n}\n\n.dsm-batchBar {\n  position: sticky;\n  bottom: 0;\n  z-index: 2;\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin-top: auto;\n  padding: 10px 14px;\n  background: var(--dsw-alias-bg-layer-1);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);\n}\n\n.dsm-batchCount {\n  flex: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-batchOps {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-stateBox {\n  display: flex;\n  flex: 1;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 56px 24px;\n  text-align: center;\n}\n\n.dsm-stateIcon {\n  color: var(--dsw-alias-label-tertiary);\n  opacity: 0.7;\n}\n\n.dsm-stateTitle {\n  margin: 0;\n  font-size: 14px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-stateHint {\n  margin: 0;\n  max-width: 420px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n\n.dsm-notice {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 8px 12px;\n  font-size: 12px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-noticeError {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-noticeInfo {\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-noticeClose {\n  flex: none;\n  padding: 0 4px;\n  font-size: 14px;\n  line-height: 1;\n  color: inherit;\n  background: none;\n  border: none;\n  cursor: pointer;\n}\n\n.dsm-purgeList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-purgeList li {\n  padding: 3px 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-skeletonRow {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 12px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n}\n\n.dsm-skeletonRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-skeletonBar {\n  height: 10px;\n  border-radius: 4px;\n  background: var(--dsw-alias-interactive-bg-hover);\n  animation: dsm-pulse 1.4s ease-in-out infinite;\n}\n\n.dsm-skeletonBarShort {\n  width: 40%;\n}\n\n@keyframes dsm-pulse {\n  0%,\n  100% {\n    opacity: 0.55;\n  }\n  50% {\n    opacity: 1;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-skeletonBar {\n    animation: none;\n  }\n\n  .dsm-row,\n  .dsm-rowActions {\n    transition: none;\n  }\n}\n\n/* --- resource detail modal (0.2.x) ---------------------------------------- */\n\n.dsm-resDialog {\n  /* the host dialog is 380px wide with overflow:hidden — widen it for the\n     resource table; height is capped by the modal's own padding box */\n  width: min(860px, 100%);\n  max-height: 100%;\n}\n\n.dsm-resContent {\n  min-height: 0;\n}\n\n.dsm-resBody {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-height: 0;\n  max-height: 100%;\n  overflow: auto;\n}\n\n.dsm-resMetaLine {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: baseline;\n  gap: 4px 14px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resCwd {\n  overflow-wrap: anywhere;\n}\n\n.dsm-resConflicts {\n  padding: 8px 10px;\n  font-size: 12px;\n  color: var(--dsw-alias-state-error-primary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resGroup {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n}\n\n.dsm-resGroupTitle {\n  margin: 6px 0 2px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resGroupList {\n  display: flex;\n  flex-direction: column;\n}\n\n.dsm-resRow {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 5px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\n}\n\n.dsm-resRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-resMain {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.dsm-resId {\n  font-size: 13px;\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resExtra {\n  margin-top: 1px;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resPills {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-pillOwn {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-resHint {\n  margin: 0;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resHintError {\n  color: var(--dsw-alias-state-error-primary);\n}\n\n.dsm-resToolbar {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  padding: 8px 10px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resAppSelect {\n  flex: 1 1 220px;\n  min-width: 0;\n  padding: 4px 8px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-primary);\n  background: var(--dsw-alias-bg-layer-2);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-resCheck {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n.dsm-resRowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n  border-radius: var(--dsw-radius-sm);\n}\n" };
 			},
 			"./locales.js": function (require, module, exports) {
 
@@ -71,6 +71,15 @@ window.__ModuleLoader__.load({
 				  'purge.confirm': '彻底删除',
 				  'purge.more': '以及另外 {n} 个会话',
 				  'res.title': '会话资源',
+				  'res.appLabel': '打开方式',
+				  'res.appDefault': '默认（在文件管理器中显示）',
+				  'res.appNone': '未扫描到其他应用',
+				  'res.open': '打开',
+				  'res.openWorkspace': '打开工作区',
+				  'res.openSelected': '打开所选（{n}）',
+				  'res.select': '选择 {name}',
+				  'res.openFailed': '打开失败（{reason}）',
+				  'res.batchOpened': '已发送 {n} 个打开请求',
 				  'res.loading': '正在加载资源…',
 				  'res.cleanup': '清理状态',
 				  'res.cleanup.active': '跟踪中',
@@ -168,6 +177,15 @@ window.__ModuleLoader__.load({
 				  'purge.confirm': 'Delete forever',
 				  'purge.more': 'and {n} more',
 				  'res.title': 'Session resources',
+				  'res.appLabel': 'Open with',
+				  'res.appDefault': 'Default (reveal in file manager)',
+				  'res.appNone': 'No other applications found',
+				  'res.open': 'Open',
+				  'res.openWorkspace': 'Open workspace',
+				  'res.openSelected': 'Open selected ({n})',
+				  'res.select': 'Select {name}',
+				  'res.openFailed': 'Open failed ({reason})',
+				  'res.batchOpened': '{n} open request(s) sent',
 				  'res.loading': 'Loading resources…',
 				  'res.cleanup': 'Cleanup',
 				  'res.cleanup.active': 'Tracking',
@@ -264,6 +282,8 @@ window.__ModuleLoader__.load({
 		    getConfig: () => call('config', {}),
 		    resources: id => call('resources', { id }),
 		    cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
+		    openResource: (id, path, app) => call('openResource', { id, path, app }),
+		    listApplications: () => call('listApplications', {}),
 		  }
 		}
 
@@ -365,8 +385,27 @@ window.__ModuleLoader__.load({
 		      },
 		      openConfirmPurge: (draft, ids) => { draft.confirmPurgeIds = ids },
 		      closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
-		      // resource detail modal (0.2.x): one open detail at a time
-		      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null } },
+		      // resource detail modal (0.2.x): one open detail at a time; the modal
+		      // owns its app-picker selection, scanned app list and batch selection
+		      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, apps: [], app: '', selected: [], busy: false } },
+		      setDetailApps: (draft, apps) => {
+		        if (draft.detail !== null) draft.detail.apps = apps
+		      },
+		      setDetailApp: (draft, app) => {
+		        if (draft.detail !== null) draft.detail.app = app
+		      },
+		      toggleDetailSelect: (draft, key) => {
+		        if (draft.detail === null) return
+		        draft.detail.selected = draft.detail.selected.includes(key)
+		          ? draft.detail.selected.filter(candidate => candidate !== key)
+		          : [...draft.detail.selected, key]
+		      },
+		      setDetailSelected: (draft, keys) => {
+		        if (draft.detail !== null) draft.detail.selected = keys
+		      },
+		      setDetailBusy: (draft, busy) => {
+		        if (draft.detail !== null) draft.detail.busy = busy === true
+		      },
 		      setDetailData: (draft, data) => {
 		        if (draft.detail !== null && draft.detail.id === data?.sessionId) {
 		          draft.detail.loading = false
@@ -470,9 +509,10 @@ window.__ModuleLoader__.load({
 		  async function openResources(id) {
 		    const seq = ++detailSeq
 		    instance.actions.openDetail(id)
-		    const [resources, status] = await Promise.all([
+		    const [resources, status, applications] = await Promise.all([
 		      api.resources(id),
 		      api.cleanupStatus(id).catch(() => null),
+		      api.listApplications().catch(() => null),
 		    ])
 		    if (seq !== detailSeq) return
 		    if (resources?.ok === true) {
@@ -483,6 +523,50 @@ window.__ModuleLoader__.load({
 		      return
 		    }
 		    if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
+		    if (applications?.ok === true && Array.isArray(applications.value?.applications)) {
+		      instance.actions.setDetailApps(applications.value.applications)
+		    }
+		  }
+
+		  /** Open one resource: reveal in the file manager or launch the chosen app. */
+		  async function openOne(sessionId, path, app) {
+		    const result = await api.openResource(sessionId, path, app === '' ? undefined : app)
+		    if (result?.ok !== true) {
+		      const message = formatError(result?.error)
+		      console.warn('[dsh-session-manager] openResource failed:', describeError(result?.error))
+		      instance.actions.setNotice({ tone: 'error', text: t('res.openFailed', { reason: message }) })
+		      return false
+		    }
+		    return true
+		  }
+
+		  /** Batch-open every selected resource; failures surface per-row. */
+		  async function openSelected() {
+		    const detail = instance.getSnapshot().detail
+		    if (detail === null || detail.busy === true) return
+		    const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
+		    const targets = detail.selected.map(key => rowsByKey.get(key)).filter(row => row !== undefined)
+		    if (targets.length === 0) return
+		    instance.actions.setDetailBusy(true)
+		    let failures = 0
+		    for (const row of targets) {
+		      const opened = await openOne(detail.id, row.identifier, detail.app)
+		      if (opened !== true) failures += 1
+		    }
+		    instance.actions.setDetailBusy(false)
+		    if (failures === 0) {
+		      instance.actions.setNotice({ tone: 'info', text: t('res.batchOpened', { n: targets.length }) })
+		      instance.actions.setDetailSelected([])
+		    }
+		  }
+
+		  /** Reveal the session workspace itself in the file manager. */
+		  async function openWorkspace() {
+		    const detail = instance.getSnapshot().detail
+		    if (detail === null) return
+		    // '.' resolves host-side to the session workspace (guarded to the cwd);
+		    // with an app selected the workspace opens in that app instead
+		    await openOne(detail.id, '.', detail.app)
 		  }
 
 		  function dispose() {
@@ -492,8 +576,16 @@ window.__ModuleLoader__.load({
 		    }
 		  }
 
-		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, dispose }
+		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, openWorkspace, dispose }
 		}
+
+		/** Stable per-row key used by the modal's batch selection. */
+		function rowKeyOf(row) {
+		  return `${row.resourceType}:${row.identifier}`
+		}
+
+		/** Path-shaped resources can be opened/revealed; env vars and processes cannot. */
+		const OPENABLE_TYPES = new Set(['file', 'configuration', 'download', 'directory', 'dependency'])
 
 		// ---------------------------------------------------------------------------
 		// Formatting helpers
@@ -766,7 +858,7 @@ window.__ModuleLoader__.load({
 		  })
 		}
 
-		function ResourcesModal({ detail, actions, t }) {
+		function ResourcesModal({ detail, actions, controller, t }) {
 		  const data = detail.data
 		  const resources = data?.resources ?? []
 		  const groups = new Map()
@@ -775,15 +867,19 @@ window.__ModuleLoader__.load({
 		    if (groups.has(type) === false) groups.set(type, [])
 		    groups.get(type).push(row)
 		  }
+		  const openableRows = resources.filter(row => OPENABLE_TYPES.has(row.resourceType))
 		  const cleanupState = detail.status?.cleanup?.state ?? (data?.tracked === false ? 'legacy' : 'none')
 		  const conflicts = Array.isArray(detail.status?.cleanup?.conflicts) ? detail.status.cleanup.conflicts : []
 		  const baseline = data?.baseline ?? null
+		  const tracked = data?.tracked === true
 
 		  return h(Modal, {
 		    open: true,
 		    onClose: actions.closeDetail,
 		    title: t('res.title'),
 		    closeLabel: t('action.closeModal'),
+		    className: 'dsm-resDialog',
+		    contentClassName: 'dsm-resContent',
 		    footer: [h(Button, { key: 'close', variant: 'primary', size: 'sm', onClick: actions.closeDetail }, t('action.closeModal'))],
 		  },
 		    h('div', { className: 'dsm-resBody' },
@@ -800,27 +896,69 @@ window.__ModuleLoader__.load({
 		          t('res.conflicts', { n: conflicts.length })),
 		        data.tracked === false && h('p', { key: 'legacy', className: 'dsm-resHint' }, t('res.legacy')),
 		        data.tracked === true && resources.length === 0 && h('p', { key: 'empty', className: 'dsm-resHint' }, t('res.empty')),
+
+		        // open toolbar: app picker (default = OS file manager reveal) + batch
+		        tracked && openableRows.length > 0 && h('div', { key: 'toolbar', className: 'dsm-resToolbar' },
+		          h('select', {
+		            key: 'app',
+		            className: 'dsm-resAppSelect',
+		            value: detail.app,
+		            onChange: event => actions.setDetailApp(event.target.value),
+		            'aria-label': t('res.appLabel'),
+		          },
+		            h('option', { key: 'default', value: '' }, t('res.appDefault')),
+		            detail.apps.length === 0 && h('option', { key: 'scanning', value: '', disabled: true }, t('res.appNone')),
+		            detail.apps.map(name => h('option', { key: name, value: name }, name)),
+		          ),
+		          h(Button, { key: 'ws', variant: 'ghost', size: 'sm', disabled: detail.busy === true, onClick: () => void controller.openWorkspace() }, t('res.openWorkspace')),
+		          h(Button, {
+		            key: 'batch',
+		            variant: 'ghost',
+		            size: 'sm',
+		            disabled: detail.selected.length === 0 || detail.busy === true,
+		            onClick: () => void controller.openSelected(),
+		          }, t('res.openSelected', { n: detail.selected.length })),
+		        ),
+
 		        RES_GROUP_ORDER.map(type => {
 		          const rows = groups.get(type)
 		          if (rows === undefined || rows.length === 0) return null
+		          const openable = OPENABLE_TYPES.has(type)
 		          return h('div', { key: type, className: 'dsm-resGroup' },
 		            h('div', { className: 'dsm-resGroupTitle' }, `${t(RES_GROUP_KEY[type])} · ${rows.length}`),
 		            h('div', { className: 'dsm-resGroupList' },
-		              rows.map(row => h('div', { key: `${row.resourceType}:${row.identifier}`, className: 'dsm-resRow' },
-		                h('div', { className: 'dsm-resMain' },
-		                  h('div', { className: 'dsm-resId' }, row.identifier),
-		                  h('div', { className: 'dsm-resExtra' }, [
-		                    row.actions !== undefined && row.actions.length > 0 ? `${t('res.lastAction')}: ${row.actions.join(', ')}` : null,
-		                    typeof row.url === 'string' ? row.url : null,
-		                    row.before !== undefined && row.before !== null ? `v${row.before} → ${row.after ?? '—'}` : null,
-		                  ].filter(Boolean).join(' · ')),
-		                ),
-		                h('div', { className: 'dsm-resPills' },
-		                  ownershipPill(row.ownership, t),
-		                  statusPill(row.status, t),
-		                ),
-		              )),
-		            ),
+		              rows.map(row => {
+		                const key = rowKeyOf(row)
+		                const selected = detail.selected.includes(key)
+		                return h('div', { key, className: cx('dsm-resRow', openable === true && 'dsm-resRowOpenable', selected === true && 'dsm-resRowSelected') },
+		                  openable === true && h('div', { className: 'dsm-resCheck' },
+		                    h(Checkbox, {
+		                      checked: selected,
+		                      onChange: () => actions.toggleDetailSelect(key),
+		                      label: t('res.select', { name: row.identifier }),
+		                    })),
+		                  h('div', { className: 'dsm-resMain' },
+		                    h('div', { className: 'dsm-resId' }, row.identifier),
+		                    h('div', { className: 'dsm-resExtra' }, [
+		                      row.actions !== undefined && row.actions.length > 0 ? `${t('res.lastAction')}: ${row.actions.join(', ')}` : null,
+		                      typeof row.url === 'string' ? row.url : null,
+		                      row.before !== undefined && row.before !== null ? `v${row.before} → ${row.after ?? '—'}` : null,
+		                    ].filter(Boolean).join(' · ')),
+		                  ),
+		                  h('div', { className: 'dsm-resPills' },
+		                    ownershipPill(row.ownership, t),
+		                    statusPill(row.status, t),
+		                    openable === true && h(Button, {
+		                      key: 'open',
+		                      variant: 'ghost',
+		                      size: 'sm',
+		                      'aria-label': t('res.open'),
+		                      disabled: detail.busy === true,
+		                      onClick: () => void controller.openOne(detail.id, row.identifier, detail.app),
+		                    }, t('res.open')),
+		                  ),
+		                )
+		              })),
 		          )
 		        }),
 		      ],

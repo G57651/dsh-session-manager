@@ -17,6 +17,8 @@
 //   cleanupStatus { ids }               -> per-id cleanup state machine summary
 //   cleanup       { ids, mode }         -> 'rollback-only' | 'resume' | 'full'
 //   track         { ids }               -> run one diff pass now (ops/debug)
+//   openResource  { id, path, app? }    -> reveal in file manager / open with app
+//   listApplications {}                 -> scanned installed apps (app dropdown)
 //
 // Every handler returns `{ ok: true, value }` or `{ ok: false, error }`;
 // batch endpoints take a single `ids` array so one RPC covers both the
@@ -43,6 +45,7 @@ import {
   unarchiveSessions,
 } from './session-manage.js'
 import { createSessionResourceManager } from './lifecycle/manager.js'
+import { createOpener } from './lifecycle/opener.js'
 
 export const name = 'dsh-session-manager'
 // The endpoints resolve their services lazily via `ctx.get` at call time, but
@@ -333,10 +336,12 @@ export function apply(ctx, config) {
   const manifest = createManifestStore(join(dshHome, 'dsh-session-manager-deleted.json'), logger)
   const titleCache = createTitleCache(join(dshHome, 'dsh-session-manager-titles.json'), logger)
   const purgeTracker = createPurgeTracker()
+  const opener = createOpener({ logger })
   const resourceManager = createSessionResourceManager({
     dshHome,
     ctx,
     manifest,
+    opener,
     getConfig: () => readConfig(config),
     logger,
   })
@@ -524,6 +529,33 @@ export function apply(ctx, config) {
         }
         return { ok: true, value: { results } }
       }, logger),
+    },
+    // open a resource in the OS file manager or a user-selected application;
+    // listApplications feeds the client's app dropdown
+    openResource: {
+      handle: async (payload) => {
+        const id = typeof payload?.id === 'string' ? payload.id : ''
+        if (id === '') return fail('no-ids', 'a single session id is required')
+        try {
+          const result = await resourceManager.openResource(id, payload?.path, typeof payload?.app === 'string' ? payload.app : undefined)
+          if (result.ok === true) return result
+          return fail(result.error?.code ?? 'open-failed', result.error?.message ?? 'open-failed')
+        } catch (error) {
+          logger?.warn?.(`[dsh-session-manager] openResource failed: ${error?.message ?? error}`)
+          return fail('internal', error?.message ?? 'open-failed')
+        }
+      },
+    },
+    listApplications: {
+      handle: async (payload) => {
+        try {
+          const value = await opener.listApplications({ refresh: payload?.refresh === true })
+          return { ok: true, value }
+        } catch (error) {
+          logger?.warn?.(`[dsh-session-manager] listApplications failed: ${error?.message ?? error}`)
+          return fail('applications-failed', error?.message ?? 'applications-failed')
+        }
+      },
     },
     track: {
       handle: payload => withBatch(config, payload, async (ids) => {

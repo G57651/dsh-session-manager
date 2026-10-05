@@ -99,10 +99,12 @@ function clampNumber(value, min, max, fallback) {
  * @param {object} [opts.manifest] trash manifest store (session-manage.js) —
  *   purge tombstones keep the baseline sweep from resurrecting dead sessions
  *   whose host-side corpus cache is stale
+ * @param {object} [opts.opener] platform opener (lifecycle/opener.js) for
+ *   reveal / open-with-application
  * @param {() => object} opts.getConfig resolved config snapshot (volatile-aware)
  * @param {object} [opts.logger]
  */
-export function createSessionResourceManager({ dshHome, ctx, manifest, getConfig, logger }) {
+export function createSessionResourceManager({ dshHome, ctx, manifest, opener, getConfig, logger }) {
   const trackingRoot = join(dshHome, 'dsh-session-manager', 'tracking')
   const runtimes = new Map() // sessionId → runtime
   const baselineJobs = new Map() // sessionId → in-flight capture promise
@@ -850,6 +852,44 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, getConfig
     return 'present'
   }
 
+  /**
+   * Open one of the session's resources: reveal it in the OS file manager
+   * (default) or launch it with a user-selected application (scanned list).
+   * The path is workspace-relative and MUST resolve inside the session's
+   * baseline cwd — the RPC surface never opens arbitrary host paths.
+   */
+  async function openResource(sessionId, relativePath, app) {
+    if (typeof relativePath !== 'string' || relativePath === '') {
+      return { ok: false, error: { code: 'no-path', message: 'a resource path is required' } }
+    }
+    const baseline = await storesFor(sessionId).baselineStore.load()
+    if (baseline === null || typeof baseline.cwd !== 'string') {
+      return { ok: false, error: { code: 'untracked', message: 'this session has no resource baseline (legacy or already cleaned)' } }
+    }
+    if (opener === undefined) {
+      return { ok: false, error: { code: 'opener-unavailable', message: 'the platform opener is not available' } }
+    }
+    const cwd = resolve(baseline.cwd)
+    const absolute = resolve(cwd, relativePath)
+    // the workspace root itself ('.') is a legitimate open target — everything
+    // else must stay strictly inside the workspace
+    if (absolute !== cwd && isInsideRoot(absolute, cwd) === false) {
+      return { ok: false, error: { code: 'unsafe-path', message: 'the resource path escapes the session workspace' } }
+    }
+    const info = await stat(absolute).catch(() => null)
+    if (info === null) {
+      return { ok: false, error: { code: 'resource-missing', message: 'the resource no longer exists on disk' } }
+    }
+    try {
+      if (typeof app === 'string' && app !== '') await opener.openWith(app, absolute)
+      else await opener.reveal(absolute)
+      return { ok: true, value: { sessionId, path: relativePath, mode: typeof app === 'string' && app !== '' ? 'app' : 'reveal' } }
+    } catch (error) {
+      logger?.warn?.(`[dsh-session-manager] open ${relativePath} failed: ${error?.message ?? error}`)
+      return { ok: false, error: { code: error?.code ?? 'open-failed', message: error?.message ?? 'open-failed' } }
+    }
+  }
+
   /** Cleanup status for the RPC layer. */
   async function getCleanupStatus(sessionId) {
     const stores = storesFor(sessionId)
@@ -970,6 +1010,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, getConfig
     getResources,
     getCleanupStatus,
     cleanupSession,
+    openResource,
     isTracked,
     cancelPendingCleanup,
     dispose,

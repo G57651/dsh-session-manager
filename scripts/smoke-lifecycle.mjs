@@ -26,6 +26,9 @@ import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// never pop real Finder/Explorer windows during the smoke run
+process.env.DSH_SM_OPEN_MODE = 'log'
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const home = mkdtempSync(join(tmpdir(), 'dsm-life-'))
 process.env.DSH_HOME = home
@@ -114,6 +117,10 @@ async function call(dispatch, endpoint, payload) {
  * sync broadcast), so the journal write behind a tool/call lands a few
  * microtasks later. Poll like the real world would.
  */
+async function peek(endpoint, payload) {
+  return dispatch(endpoint, payload)
+}
+
 async function waitFor(predicate, { timeout = 4000, step = 20 } = {}) {
   const start = Date.now()
   while (Date.now() - start < timeout) {
@@ -158,7 +165,7 @@ const dispatch = app.dispatch
   // the agent creates a file; only the tool/result event fires (no track RPC)
   writeFileSync(join(cwd, 'live.txt'), 'live')
   await app.toolResult(id)
-  ok(await waitFor(async () => (await call(dispatch, 'changes', { id })).value.changes.some(record => record.action === 'created' && record.resource.path === 'live.txt')), 'event: debounced diff journals the created file')
+  ok(await waitFor(async () => (await peek('changes', { id })).value.changes.some(record => record.action === 'created' && record.resource.path === 'live.txt')), 'event: debounced diff journals the created file')
 
   // deleting the session removes what it created — the core promise
   const result = await call(dispatch, 'delete', { ids: [id] })
@@ -173,7 +180,7 @@ const dispatch = app.dispatch
   const cwd = makeSession(id)
   const list = await call(dispatch, 'list', { view: 'all' })
   ok(list.value.rows.find(row => row.id === id) !== undefined, 'self-heal: session listed')
-  ok(await waitFor(async () => (await call(dispatch, 'list', { view: 'all' })).value.rows.find(row => row.id === id)?.tracked === true), 'self-heal: list request baselines the row (tracked=true)')
+  ok(await waitFor(async () => (await peek('list', { view: 'all' })).value.rows.find(row => row.id === id)?.tracked === true), 'self-heal: list request baselines the row (tracked=true)')
   removeSessionFromCorpus(id)
 }
 
@@ -331,7 +338,7 @@ const dispatch = app.dispatch
   await call(dispatch, 'track', { ids: [id] })
 
   await app.toolCall(id, 'bash', { command: 'export DSM_LIFE_FOO=123' })
-  ok(await waitFor(async () => 'DSM_LIFE_FOO' in process.env && (await call(dispatch, 'changes', { id })).value.total >= 1), 'case6: env applied at record time and journaled')
+  ok(await waitFor(async () => 'DSM_LIFE_FOO' in process.env && (await peek('changes', { id })).value.total >= 1), 'case6: env applied at record time and journaled')
   const changes = await call(dispatch, 'changes', { id })
   const setRecord = changes.value.changes.find(record => record.resourceType === 'environment_variable')
   ok(setRecord?.action === 'set' && setRecord.before === null && setRecord.after?.value === '123', 'case6: set journaled with before=null')
@@ -351,7 +358,7 @@ const dispatch = app.dispatch
   await call(dispatch, 'track', { ids: [id] })
 
   await app.toolCall(id, 'bash', { command: 'export DSM_LIFE_BAR=new && export DSM_LIFE_TOKEN=sekrit-new' })
-  ok(await waitFor(async () => (await call(dispatch, 'changes', { id })).value.total >= 2), 'case7: both env mutations journaled')
+  ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 2), 'case7: both env mutations journaled')
   const changes = await call(dispatch, 'changes', { id })
   const barRecord = changes.value.changes.find(record => record.resource?.name === 'DSM_LIFE_BAR')
   const tokenRecord = changes.value.changes.find(record => record.resource?.name === 'DSM_LIFE_TOKEN')
@@ -574,6 +581,49 @@ function forceBoot() {
   ok(status.value.results[0]?.tracked === false && status.value.results[0]?.legacy === true, 'status: unknown id reports untracked legacy')
   ok((await call(dispatch, 'cleanup', {})).error?.code === 'no-ids', 'cleanup: empty batch rejected')
   ok((await call(dispatch, 'changes', {})).error?.code === 'no-ids', 'changes: missing id rejected')
+}
+
+// --- open / reveal resources (file manager + app dropdown plumbing) -------------
+{
+  const { openLog } = await import(new URL('../lifecycle/opener.js', import.meta.url).href)
+  const id = 'session-open'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'openable.txt'), 'open me')
+  await call(dispatch, 'track', { ids: [id] })
+
+  // default: reveal in the OS file manager
+  let result = await call(dispatch, 'openResource', { id, path: 'openable.txt' })
+  ok(result.ok === true && result.value.mode === 'reveal', `open: default reveal ok, got ${JSON.stringify(result)}`)
+  const platform = (await call(dispatch, 'listApplications', {})).value.platform
+  if (platform === 'darwin') {
+    ok(openLog.some(argv => argv[0] === 'open' && argv[1] === '-R' && argv[2] === join(cwd, 'openable.txt')), 'open: reveal argv is `open -R <abs>`')
+  }
+
+  // with a scanned application
+  result = await call(dispatch, 'openResource', { id, path: 'openable.txt', app: 'Visual Studio Code' })
+  ok(result.ok === true && result.value.mode === 'app', 'open: with app ok')
+  if (platform === 'darwin') {
+    ok(openLog.at(-1)[0] === 'open' && openLog.at(-1)[1] === '-a', 'open: app argv uses `open -a`')
+  }
+
+  // the workspace root itself ('.') is a legal target
+  result = await call(dispatch, 'openResource', { id, path: '.' })
+  ok(result.ok === true, 'open: workspace root allowed')
+
+  // guards: traversal outside the workspace, missing files
+  result = await call(dispatch, 'openResource', { id, path: '../outside.txt' })
+  ok(result.ok === false && result.error.code === 'unsafe-path', 'open: traversal rejected')
+  result = await call(dispatch, 'openResource', { id, path: 'gone.txt' })
+  ok(result.ok === false && result.error.code === 'resource-missing', 'open: missing file reported')
+  result = await call(dispatch, 'openResource', { id: 'session-never', path: 'x.txt' })
+  ok(result.ok === false && result.error.code === 'untracked', 'open: untracked session reported')
+
+  // app list is scan-fed and sorted
+  const apps = await call(dispatch, 'listApplications', {})
+  ok(apps.ok === true && Array.isArray(apps.value.applications), 'open: application list ok')
+  ok(JSON.stringify(apps.value.applications) === JSON.stringify([...apps.value.applications].sort((a, b) => a.localeCompare(b))), 'open: application list sorted')
+
+  removeSessionFromCorpus(id)
 }
 
 // --- dispose -----------------------------------------------------------------------
