@@ -106,7 +106,7 @@ host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返
 | `purge` | `{ ids }` | 彻底删除：资源回滚 + 移除会话目录 + 墓碑 | 0.1.0 |
 | `config` | `{}` | 客户端配置 | 0.1.0 |
 | `changes` | `{ id, limit? }` | 该会话的 Journal 尾部 | **0.2.0** |
-| `resources` | `{ id }` | Baseline + Journal 推导的资源视图（含当前状态） | **0.2.0** |
+| `resources` | `{ id }` | **仅本次会话产生的资源**（新增 / 修改 / 删除 / 安装 / 配置，含当前状态）；既有内容只在基线摘要中计数，不逐条列出 | **0.2.0** |
 | `cleanupStatus` | `{ ids }` | 每会话清理状态机快照（冲突 / 失败明细） | **0.2.0** |
 | `cleanup` | `{ ids, mode }` | `rollback-only`（回滚资源保留会话）/ `resume` / `full` | **0.2.0** |
 | `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试） | **0.2.0** |
@@ -239,6 +239,12 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 - client 半本版未改：资源视图（`resources` / `changes` / `cleanupStatus`）当前经 RPC 查询，尚未接入面板 UI。
 
 ## 变更记录
+
+### 0.2.3（资源视图只列会话产物）
+
+- **`resources` 视图不再列出会话前已存在的文件**：此前基线里的全部既有文件（标「原有」）会出现在资源弹窗里，工作区大时被无关行淹没。现在视图**只输出本次会话产生的变化**——`session_created` / `session_modified` / `session_deleted` / `session_installed` / `session_configured` 的 Journal 记录；被会话修改 / 删除过的既有文件仍会列出（它们是会话产生的变化，回滚语义不变），**未被触碰的既有文件完全不出现**，只在基线摘要里计一个数（`baseline.fileCount`）。
+- 语义与需求一致：任务开始前基线快照（`session/created` 即建）→ 事件 + diff 对比 → 视图只列对比出的会话产物；清理行为不受影响（本就只回滚会话拥有的资源）。
+- 测试：`smoke-lifecycle.mjs` 187 项断言（新增"未触碰既有文件不列出 / 无 preexisting 行"用例）。
 
 ### 0.2.2（修复面板黑屏）
 

@@ -711,8 +711,14 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, getConfig
   }
 
   /**
-   * Resource view: baseline (preexisting) + journal-derived session-owned
-   * resources with their CURRENT status. One row per resource.
+   * Resource view: ONLY what this session produced (requirement: baseline
+   * before the task, compare after, list the session's own additions/changes
+   * — never the files that already existed and were left untouched).
+   *
+   * Rows come from the change journal (session_created / session_modified /
+   * session_deleted / session_installed / session_configured). Pre-existing
+   * baseline content is summarized (file count / cwd / capturedAt) but NOT
+   * listed; it is the reference for ownership and restore, not a result.
    */
   async function getResources(sessionId) {
     const stores = storesFor(sessionId)
@@ -723,32 +729,6 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, getConfig
 
     const rows = new Map() // key → row
     const rowKey = (kind, id) => `${kind}\u0000${id}`
-
-    // baseline → preexisting rows
-    for (const [path, entry] of Object.entries(baseline.files ?? {})) {
-      rows.set(rowKey('path', path), {
-        resourceType: 'file',
-        identifier: path,
-        ownership: OWNERSHIP.PREEXISTING,
-        actions: [],
-        baseline: { sha256: entry.sha256, size: entry.size },
-        lastTimestamp: baseline.capturedAt,
-      })
-    }
-    // baseline dependencies → preexisting rows (the journal updates them the
-    // moment the session touches the package)
-    for (const [manager, packages] of Object.entries(baseline.dependencies ?? {})) {
-      for (const [name, info] of Object.entries(packages ?? {})) {
-        rows.set(rowKey('dep', `${manager}/${name}`), {
-          resourceType: RESOURCE_TYPES.DEPENDENCY,
-          identifier: `${manager}/${name}`,
-          ownership: OWNERSHIP.PREEXISTING,
-          actions: [],
-          before: info?.version ?? null,
-          lastTimestamp: baseline.capturedAt,
-        })
-      }
-    }
 
     // journal records → session-owned rows (latest record wins the label)
     for (const record of records) {

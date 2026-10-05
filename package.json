@@ -1,6 +1,6 @@
 {
   "name": "@g57651/dsh-session-manager",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Web 侧边栏会话管理面板 + 会话资源生命周期管理器：全部 / 已归档 / 已删除视图、批量管理，以及 Baseline / Change Journal / Cleanup Engine 驱动的资源回滚。",
   "type": "module",
   "main": "./index.js",

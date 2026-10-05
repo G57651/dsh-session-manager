@@ -238,17 +238,23 @@ const dispatch = app.dispatch
   const id = 'session-case2'
   const cwd = makeSession(id)
   writeFileSync(join(cwd, 'config.json'), 'A')
+  writeFileSync(join(cwd, 'untouched.txt'), 'never touched')
   await call(dispatch, 'track', { ids: [id] })
   writeFileSync(join(cwd, 'config.json'), 'B')
   await call(dispatch, 'track', { ids: [id] })
 
+  // the view lists the session's own changes only: the modified file IS
+  // listed (as a change), the untouched file is NOT listed at all
   const resources = await call(dispatch, 'resources', { id })
   const configRow = resources.value.resources.find(row => row.identifier === 'config.json')
   ok(configRow?.ownership === 'session_modified', `case2: modify stamped session_modified, got ${configRow?.ownership}`)
+  ok(resources.value.resources.some(row => row.identifier === 'untouched.txt') === false, 'case2: untouched pre-existing file NOT listed')
+  ok(resources.value.resources.every(row => row.ownership !== 'preexisting'), 'case2: no pre-existing rows at all')
 
   const result = await call(dispatch, 'delete', { ids: [id] })
   ok(result.value.results[0]?.ok === true, 'case2: delete ok')
   ok(read(join(cwd, 'config.json')) === 'A', `case2: config.json restored to A, got ${JSON.stringify(read(join(cwd, 'config.json')))}`)
+  ok(read(join(cwd, 'untouched.txt')) === 'never touched', 'case2: untouched file intact')
   ok(!existsSync(trackingDir(id)), 'case2: journal destroyed')
   removeSessionFromCorpus(id)
 }
@@ -303,9 +309,13 @@ const dispatch = app.dispatch
   writeFileSync(join(cwd, 'package.json'), JSON.stringify({ name: 'app', dependencies: { axios: '^1.0.0' } }, null, 2))
   await call(dispatch, 'track', { ids: [id] })
 
+  // the resources view lists ONLY what the session produced — pre-existing
+  // content (axios, package.json) must not appear as rows
   const resources = await call(dispatch, 'resources', { id })
-  ok(resources.value.resources.some(row => row.resourceType === 'dependency' && row.ownership === 'preexisting'), 'case5: baseline dependency appears as preexisting (via baseline deps row)')
-  // (the dep view derives from journal records; with none, the package stays untouched — the real assertion is below)
+  ok(resources.value.tracked === true, 'case5: view available')
+  ok(resources.value.resources.every(row => row.ownership !== 'preexisting'), 'case5: no pre-existing rows in the resource view')
+  ok(resources.value.resources.every(row => row.identifier !== 'node_modules/axios'), 'case5: untouched pre-existing dependency not listed')
+  ok(resources.value.baseline?.fileCount >= 1, 'case5: baseline summary still reports the pre-existing content')
 
   await call(dispatch, 'delete', { ids: [id] })
   ok(existsSync(join(cwd, 'node_modules', 'axios')), 'case5: pre-existing axios still installed after cleanup')
