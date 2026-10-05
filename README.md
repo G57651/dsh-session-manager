@@ -1,64 +1,152 @@
 # dsh-session-manager
 
-DeepSeek Harness Web UI 会话管理插件：在主页侧边栏新增一个「会话管理」面板，提供全部 / 已归档 / 已删除三个视图、手动 + 自动刷新，以及批量管理（归档 / 取消归档 / 删除 / 恢复 / 彻底删除）。
+**DeepSeek Harness 插件：会话资源生命周期管理器（Session Resource Lifecycle Manager）+ Web 侧边栏会话管理面板。**
 
-0.2.0 起插件同时是一个 **Session Resource Lifecycle Manager（会话资源生命周期管理器）**：会话在其工作目录里创建 / 修改 / 删除的文件、安装的依赖、设置的环境变量、发起的下载都会被记录到按会话隔离的 Change Journal；删除会话时按 Journal 反向清理或回滚这些资源，最后才销毁 Journal。
+> **核心语义**：Session 创建了什么，就记录什么；修改了什么，就记录什么；删除了什么，就记录什么；安装了什么，就记录什么；配置了什么，就记录什么。**Session 删除时，不仅删除 Session 本身，还要按变更记录反向清理这些变化——最后才删除变更记录。**
 
-## 功能
+0.2.0 起插件完成架构升级：从「管理 Session 这一行」升级为「管理这个 Session 对世界做了什么」。旧版本的 RPC 契约、调用方与 Web 客户端**完全兼容，可直接升级**（旧会话自动识别为 legacy，行为可整体回退，见「配置」）。
 
-- **全部**：未删除的所有会话（含已归档，带「已归档」徽标），显示标题、相对更新时间、大小、工作目录；行悬停有归档/删除快捷操作。
-- **已归档**：原生归档会话（`ctx.workspaceRegistry`），可批量取消归档。
-- **已删除**：插件自建回收站清单。删除为**软删除**（借原生归档从主列表隐藏 + 回收站记录；0.1.4 起会话目录同样被移除，恢复仅还原列表行、不还原磁盘数据）；可批量恢复、可彻底删除（二次确认后停活动 → 资源回滚 → 移除 `$DSH_HOME/sessions` 下的会话目录）。
-- **资源生命周期跟踪（0.2.0）**，见下文「资源生命周期」：
-  - **Baseline**：插件首次看到会话时对其工作目录做有界扫描（文件数 / 深度 / 排除目录均受配置约束），基线内一切资源记为 `preexisting`，永不因会话删除而被移除。
-  - **Change Journal**：`tool/call` 事件驱动（shell 命令解析 export/unset、后台进程、下载意图）+ `tool/result` 触发的防抖工作区 diff + 删除前的最终 diff，全部以 append-only JSONL 逐条落盘。
-  - **Ownership**：每条变更在记录时刻对照 Baseline 判定归属（`session_created` / `session_modified` / `session_deleted` / `session_installed` / `session_configured` / `preexisting`）并冻结进记录。
-  - **Cleanup Engine**：删除 / 彻底删除时执行 `卸载会话新装依赖 → 恢复被删文件 → 恢复被改文件（含配置）→ 移除会话新建文件与目录 → 恢复环境变量 → 校验 → 删会话目录 → 删 Journal` 的完整流程；每一步先做状态校验（当前 hash ≠ Journal 预期 → 记为 CONFLICT，安全模式下跳过而不静默覆盖），幂等可重入。
-  - **崩溃恢复**：清理状态机（`cleanup.json`）先于动作落盘；进程崩溃 / 重启后自动续跑未完成的清理，绝不留下半删除状态。
-- **刷新**：手动刷新按钮；同时监听 `api-session/added|removed|status|activity` 远程事件自动同步（可在配置中关闭）。
-- **批量管理**：显式进入选择模式（复选框 + 全选 / 反选 + 底部浮动操作栏），操作集随当前视图变化。
-- 中英双语（跟随宿主语言）、明暗主题自动跟随（仅使用 `--dsw-alias-*` 语义 token）。
+---
 
-## 资源生命周期（0.2.0）
+## 一、生命周期模型
 
-### 数据布局
-
-```text
-$DSH_HOME/dsh-session-manager/tracking/<encoded-session-id>/
-├── baseline.json     # 首次见到的有界工作区快照（含依赖快照）
-├── changes.jsonl     # append-only 变更日志（一条一行）
-├── cleanup.json      # 清理状态机 + 最近一次清理的结果 / 冲突 / 失败
-└── snapshots/        # 内容寻址 blob（sha256），存 modify/delete 的 before 内容
+```
+Session
+├── Baseline          插件首次看到会话时的有界工作区快照（文件哈希 + 内容 + 依赖快照）
+├── Resources         会话涉及的资源，统一抽象，Tracker 可扩展
+├── Change Journal    按会话隔离的 append-only 变更日志（JSONL）
+└── Cleanup State     清理状态机，先于动作落盘（cleanup.json）
 ```
 
-### RPC 端点（host 半，`/dsh-session-manager` 通道）
+**跟踪链路**（事件 + diff 混合式，不依赖单一文件监视器）：
 
-原有 `list / archive / unarchive / delete / restore / purge / config` 全部保持兼容（`delete` / `purge` / `restore` 的返回值新增了可选的 `cleanup` / `journalRemoved` 字段，旧客户端忽略即可）。新增：
+```
+Session Context
+    ↓
+Command / Process Context      tool/call 事件：解析 export/unset、后台进程、下载意图（含 URL 归因）
+    ↓
+Resource Tracking              tool/result 触发防抖工作区 diff + 可选周期扫描
+    ↓
+Change Journal                 逐条 append-only 落盘 + 删除前最终 diff（仅对空闲窗口内仍活跃的会话）
+```
 
-| 端点 | 入参 | 说明 |
-|------|------|------|
-| `changes` | `{ id, limit? }` | 该会话的 Journal 尾部 |
-| `resources` | `{ id }` | Baseline（preexisting）+ Journal 推导的资源视图，含当前状态 |
-| `cleanupStatus` | `{ ids }` | 每个会话的清理状态机快照（状态 / 冲突 / 失败明细） |
-| `cleanup` | `{ ids, mode }` | `rollback-only`（默认，回滚资源保留会话）/ `resume`（续跑未完成清理）/ `full`（回滚 + 删会话目录 + 删 Journal） |
-| `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试用） |
+**资源与动作**（不同资源类型只实现适用的动作）：
 
-### 归属权与冲突
+| 资源类型 | 记录的动作 | 删除 Session 时的回滚语义 |
+|---|---|---|
+| `file` | created / modified / deleted / moved / renamed / permission_changed | 会话新建 → 移除；修改 → 恢复基线内容；删除 → 从快照恢复 |
+| `directory` | created | 会话新建 → 空目录移除（非空保守跳过） |
+| `configuration` | 修改（package.json、.env、tsconfig 等知名配置） | 按基线快照恢复 |
+| `download` | downloaded（记录源 URL / 目标 / 时间 / 大小 / 哈希） | 同 file：新建则删，覆盖了原有文件则按基线恢复 |
+| `dependency` | installed / uninstalled / upgraded（Adapter/Strategy，内置 `node_modules` 适配器） | 会话新装 → 卸载；已有依赖 → **绝不动**（升级/卸过仅报告） |
+| `environment_variable` | set / unset（含 before / after / scope） | 会话新建 → unset；修改 → 恢复原值；敏感值见「安全」 |
+| `process` | spawned（nohup / 后台 `&`） | 记录在案；存活进程由宿主停活动机制处理 |
 
-- 基线中存在的资源：会话删除它 → 恢复；修改它 → 恢复基线内容；会话新建的资源：直接移除；会话新装的依赖（`node_modules` 适配器）：卸载目录。升级过已有依赖 / 卸载过已有依赖会被记录，但自动降级 / 重装不被尝试（在冲突报告中说明原因）。
-- 回滚每个资源前先校验「当前 hash == Journal 最后的 after hash」；不一致说明会话结束后又被其他进程改过 → 记入 `conflicts`（`cleanupStatus` 可查），安全模式（默认）下跳过，`conflictMode: 'force'` 时才以基线内容覆盖。
-- 环境变量按名做敏感识别（TOKEN/SECRET/KEY/PASSWORD/...）：敏感值只存存在性 + SHA-256 指纹，绝不落明文；敏感变量的自动回滚不可为（指纹可判等但值不可恢复），记为冲突交由人工处理。
-- 会话空闲超过 `trackingIdleWindowMs` 后删除时跳过最终 diff——空闲期的工作区变更按外部修改处理，不会被记到会话头上。
+**归属权（Ownership）**——判断一个资源到底是不是当前 Session 产生的，记录时刻对照 Baseline 判定并冻结：
 
-### 旧会话兼容
+| 归属 | 场景 | 删除 Session 时 |
+|---|---|---|
+| `session_created` | 基线里没有，会话建了它 | 直接移除 |
+| `session_modified` | 基线里就有，会话改了它 | 恢复修改前状态，**而不是删除文件** |
+| `session_deleted` | 基线里就有，会话删了它 | 按 before 快照恢复 |
+| `session_installed` | 会话装的新依赖 | 卸载 |
+| `session_configured` | 会话改了知名配置文件 | 按快照恢复 |
+| `preexisting` | 基线即有的资源 | **永不因会话删除而被移除** |
 
-升级前创建的会话没有 tracking 目录：`changes` / `resources` 报告 `tracked: false`，删除走原有路径（`cleanup.skipped: 'legacy-untracked'`），绝不把工作区里的既有文件当成它会话产生的。
+## 二、Cleanup / Rollback Engine
 
-## 手动安装
+删除 / 彻底删除时的执行顺序（每步先做状态校验，全部幂等可重入）：
+
+```
+ 1. Lock Session（状态机落盘，跨进程锁：owner pid + 时效）
+ 2. 停止 Session 活动（复用宿主 archiveSession stopActivity）
+ 3. 最终 diff（空闲超窗的会话跳过——空闲期变更按外部修改处理）
+ 4. 加载 Change Journal
+ 5. 卸载会话新装的依赖
+ 6. 恢复被删除的资源（快照回写 + 哈希校验）
+ 7. 恢复被修改的资源（含配置、权限位）
+ 8. 移除会话新建的资源（文件先于目录，目录最深优先）
+ 9. 恢复环境变量（before=null → unset；修改 → 恢复原值）
+10. 校验清理结果（独立 verify 阶段）
+11. 落盘 cleanup 结果（rollback_verified / rollback_failed）
+12. 删除 Session 数据（会话目录）
+13. ✅ 验证通过后才销毁 Change Journal（rollback_failed 时 Journal 保留供重试）
+```
+
+**冲突保护**：回滚每个资源前校验「当前 hash == Journal 预期 after hash」。不一致 = 会话结束后又被其他进程改过 → 记入 `conflicts`（含 expected / current / reason），**安全模式跳过，绝不静默覆盖**；`conflictMode: 'force'` 才以基线内容覆盖。多会话改同一文件时，后删者不会破坏先者的外部修改。
+
+**崩溃恢复**：清理状态机（`active → delete_requested → rolling_back → rollback_verified / rollback_failed → session_deleted → complete`）**先于动作落盘**；进程崩溃 / 机器重启后自动识别未完成清理并续跑，绝不留半删除状态。恢复（restore）会取消未完成清理——不会把用户刚恢复的会话删掉。
+
+**安全**：敏感环境变量（TOKEN / SECRET / KEY / PASSWORD / ...）的**值永不落 Journal**——只存存在性 + SHA-256 指纹；其自动回滚不可为时如实记为冲突，交人工处理。
+
+**旧会话兼容**：升级前创建的会话没有 tracking 目录，自动按 `legacy-untracked` 处理：只走原有删除路径，**绝不把工作区既有文件当成它创建的**。
+
+## 三、数据布局
+
+```
+$DSH_HOME/dsh-session-manager/tracking/<encoded-session-id>/
+├── baseline.json     # 首次见到的有界工作区快照（含依赖快照）
+├── changes.jsonl     # append-only 变更日志（一条一行，容忍撕裂尾行）
+├── cleanup.json      # 清理状态机 + 最近一次结果 / 冲突 / 失败
+└── snapshots/        # 内容寻址 blob（sha256），modify/delete 的 before 内容
+```
+
+扫描边界：严格限定会话 cwd（文件数 / 深度 / 排除目录 / 单文件快照大小均受配置约束），默认排除 `node_modules` / `.git` / `dist` 等，**绝不扫描宿主机全局**。
+
+## 四、RPC API
+
+host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返回逐条结果；原有 7 端点行为不变）：
+
+| 端点 | 入参 | 说明 | 引入 |
+|---|---|---|---|
+| `list` | `{ view }` | 三视图行 + 计数；行新增 `tracked` 字段 | 0.1.0 |
+| `archive` / `unarchive` | `{ ids }` | 原生归档 / 取消 | 0.1.0 |
+| `delete` | `{ ids }` | 软删除：清单 + 停活动 + **资源回滚** + 移除会话目录 | 0.1.0 |
+| `restore` | `{ ids }` | 恢复列表行 + 取消未完成清理 | 0.1.0 |
+| `purge` | `{ ids }` | 彻底删除：资源回滚 + 移除会话目录 + 墓碑 | 0.1.0 |
+| `config` | `{}` | 客户端配置 | 0.1.0 |
+| `changes` | `{ id, limit? }` | 该会话的 Journal 尾部 | **0.2.0** |
+| `resources` | `{ id }` | Baseline + Journal 推导的资源视图（含当前状态） | **0.2.0** |
+| `cleanupStatus` | `{ ids }` | 每会话清理状态机快照（冲突 / 失败明细） | **0.2.0** |
+| `cleanup` | `{ ids, mode }` | `rollback-only`（回滚资源保留会话）/ `resume` / `full` | **0.2.0** |
+| `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试） | **0.2.0** |
+
+`delete` / `purge` / `restore` 返回值新增可选 `cleanup` / `journalRemoved` 字段——旧客户端忽略即可。
+
+## 五、配置
+
+在 profile 的 `cordis.patch.yml` 覆盖本插件行的 `config`，或在插件管理器的 bundle 配置里修改。**全部字段 volatile 热更，改完无需重挂载。**
+
+| 字段 | 默认 | 说明 | 引入 |
+|---|---|---|---|
+| `confirmPurge` | `true` | 彻底删除前确认框（客户端行为） | 0.1.0 |
+| `autoRefresh` | `true` | 监听会话事件自动刷新列表（客户端行为） | 0.1.0 |
+| `maxBatchSize` | `200` | 单次批量操作 id 数上限 | 0.1.0 |
+| `titleFetchLimit` | `300` | 每次列表补拉冷会话标题上限 | 0.1.0 |
+| `trackingEnabled` | `true` | 资源生命周期跟踪总开关（`false` 即回到 0.1.x 行为） | **0.2.0** |
+| `autoCleanup` | `true` | delete/purge 时执行资源回滚 | **0.2.0** |
+| `autoResume` | `true` | 启动时续跑未完成清理 | **0.2.0** |
+| `trackingPollMs` | `0` | 周期性 diff 间隔；0 = 仅事件驱动 + 删除前最终 diff | **0.2.0** |
+| `trackingIdleWindowMs` | `300000` | 会话空闲多久后视为「已安静」 | **0.2.0** |
+| `trackingMaxFiles` | `5000` | 基线/diff 扫描文件数上限 | **0.2.0** |
+| `trackingMaxDepth` | `12` | 基线/diff 扫描深度上限 | **0.2.0** |
+| `trackingMaxSnapshotBytes` | `8388608` | 单文件 before 内容快照上限 | **0.2.0** |
+| `trackingExclude` | `[]` | 额外排除的目录名 | **0.2.0** |
+| `conflictMode` | `'safe'` | 冲突处理：`safe` 跳过 / `force` 记录后覆盖 | **0.2.0** |
+
+## 六、数据文件
+
+- `$DSH_HOME/dsh-session-manager-deleted.json` — 回收站清单（`{id, title, cwd, deletedAt, wasArchived}`）。
+- `$DSH_HOME/dsh-session-manager-titles.json` — 会话标题缓存（含负缓存；实时会话经 `session/title` 事件保持最新）。
+- `$DSH_HOME/dsh-session-manager/tracking/<id>/` — 每会话的 `baseline.json` / `changes.jsonl` / `cleanup.json` / `snapshots/`（0.2.0）。
+
+以上文件都由插件自维护；tracking 目录在清理验证完成后随 Journal 一起删除，卸载插件后可手动删除其余文件。
+
+## 七、安装
 
 > ### ⚠️ 必须通过 Plugins 面板安装
 >
-> **手工把文件复制进 `~/.dsh/profiles/<profile>/node_modules/` 不会生效。** 插件管理器在安装成功后会把这个包名追加到 profile `package.json` 的 `dsh.profile.bundles`；宿主只加载该列表里登记过的 bundle 层。没有这条登记的包就是死代码——文件躺在 `node_modules` 里，插件不加载、不报错，并会在 profile 依赖重整时被无声删除。
+> **手工把文件复制进 `~/.dsh/profiles/<profile>/node_modules/` 不会生效。** 插件管理器在安装成功后会把包名追加到 profile `package.json` 的 `dsh.profile.bundles`；宿主只加载该列表里登记过的 bundle 层——没有这条登记的包就是死代码，不加载、不报错，并会在依赖重整时被无声删除。另外 profile 需包含提供宿主服务层（`connection` / `workspaceRegistry` 等）的 web/desktop app bundle，纯 `dsh-base` 的裸 profile 会让插件静默 PENDING。
 
 **方式 A：Web UI 从 tarball 安装（推荐）**
 
@@ -66,13 +154,13 @@ $DSH_HOME/dsh-session-manager/tracking/<encoded-session-id>/
 2. 在输入框（无障碍标签「包名或地址」）填 tarball 的**绝对路径**：
 
    ```
-   /Users/<你的用户名>/Downloads/dsh-session-manager-0.1.2.tgz
+   /Users/<你的用户名>/Downloads/dsh-session-manager-0.2.0.tgz
    ```
 
 3. 安装完成后在 Plugins 面板**启用**该插件——宿主会同时完成 `dsh.profile.bundles` 登记。
-4. 刷新 Web UI（`http://127.0.0.1:19387`），侧边栏出现「会话管理」入口。
+4. 刷新 Web UI，侧边栏出现「会话管理」入口。
 
-**必须是绝对路径。** 安装框只接受绝对路径：`./x.tgz` 与 `~/Downloads/x.tgz` 都会被直接拒绝（`a local path must be absolute`）——`~` 不被 `node:path.isAbsolute` 认可，请写完整路径。
+**必须是绝对路径。** 安装框只接受绝对路径：`./x.tgz` 与 `~/Downloads/x.tgz` 都会被直接拒绝（`~` 不被 `node:path.isAbsolute` 认可）。
 
 **方式 B：Web UI 从 GitHub 仓库安装**
 
@@ -82,7 +170,7 @@ $DSH_HOME/dsh-session-manager/tracking/<encoded-session-id>/
 github:G57651/dsh-session-manager
 ```
 
-仓库自带构建产物（`client.js` 已提交），无需本地构建。安装时需能访问 npm registry（拉取 `@deepseek-ai/schemastery` 依赖）。
+仓库自带构建产物（`client.js` 已提交），无需本地构建。安装时需能访问 npm registry（拉取 `@deepseek-ai/schemastery` 依赖）。也可直接从 [GitHub Releases](https://github.com/G57651/dsh-session-manager/releases) 下载 tarball 后按方式 A 安装。
 
 **方式 C：Web UI 从本地目录安装**
 
@@ -94,16 +182,16 @@ git clone https://github.com/G57651/dsh-session-manager.git /绝对路径/dsh-se
 
 **⚠️ 不要按包名安装**
 
-本插件**尚未发布到 npm**，且包名 `dsh-session-manager` 在公共 registry 上**已被另一位作者占用**（latest 0.5.3，对方发布的版本序列中同样包含 0.1.1）。
+本插件**尚未发布到 npm**，且包名 `dsh-session-manager` 在公共 registry 上**已被另一位作者占用**（latest 0.5.3，对方的版本序列中同样包含 0.1.1）。
 
-- 在安装框填 `dsh-session-manager` → pnpm 按 registry 包名解析，会**静默装回别人的包**：安装成功、不报任何错，但那是删除 / 归档 / 跨工作区移动 / 收藏 / 标签 / 备注那一套，与本插件功能完全不同。
+- 在安装框填 `dsh-session-manager` → pnpm 按 registry 包名解析，会**静默装回别人的包**：安装成功、不报任何错，但那是另一套功能。
 - 在安装框填 `@g57651/dsh-session-manager` → 404，因为本包未发布。这是预期结果，不是配置错误。
 
 本包使用 `@g57651` 命名空间，只应通过上面的 tarball / GitHub / 本地目录三种方式安装。
 
 **方式 D：dsh CLI（仅当你另有独立 CLI 环境）**
 
-桌面 App 的安装包内**不含 `dsh` 可执行文件**（PATH、`/usr/local/bin`、`/opt/homebrew/bin`、App bundle 内均无），所以下面命令在桌面 App 默认安装下不可用，仅供已有独立 CLI 者参考：
+桌面 App 的安装包内**不含 `dsh` 可执行文件**（PATH、`/usr/local/bin`、App bundle 内均无），所以下面命令在桌面 App 默认安装下不可用，仅供已有独立 CLI 者参考：
 
 ```sh
 dsh plugin --profile desktop add github:G57651/dsh-session-manager
@@ -114,36 +202,7 @@ dsh plugin --profile desktop add ./dsh-session-manager
 
 **与 `@gehennawu/dsh-service` 并存**：两者功能有重叠且互不相干（各自的回收站清单不互通）。同时启用会出现两个会话管理入口，建议在 Plugins 页停用其一。
 
-## 配置
-
-在 profile 的 `cordis.patch.yml` 覆盖本插件行的 `config`，或在插件管理器的 bundle 配置里修改：
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `confirmPurge` | `true` | 彻底删除前是否弹出确认框（客户端行为） |
-| `autoRefresh` | `true` | 是否监听会话事件自动刷新列表 |
-| `maxBatchSize` | `200` | 单次批量操作接受的 id 数上限 |
-| `titleFetchLimit` | `300` | 每次列表请求补拉冷会话标题的数量上限 |
-| `trackingEnabled` | `true` | 资源生命周期跟踪总开关（关闭后行为回到 0.1.x） |
-| `autoCleanup` | `true` | delete/purge 时是否执行资源回滚 |
-| `autoResume` | `true` | 启动时是否续跑未完成的清理 |
-| `trackingPollMs` | `0` | 周期性工作区 diff 间隔；0 = 仅事件驱动 + 删除前最终 diff |
-| `trackingIdleWindowMs` | `300000` | 会话事件空闲多久后视为「已安静」，删除时跳过最终 diff |
-| `trackingMaxFiles` | `5000` | 基线/diff 扫描的文件数上限 |
-| `trackingMaxDepth` | `12` | 基线/diff 扫描的目录深度上限 |
-| `trackingMaxSnapshotBytes` | `8388608` | 单文件 before 内容快照上限，超出只记 hash（不可自动恢复） |
-| `trackingExclude` | `[]` | 额外排除的目录名（默认已排除 node_modules/.git/dist 等） |
-| `conflictMode` | `'safe'` | `safe` 跳过冲突资源；`force` 记录冲突后仍以基线内容覆盖 |
-
-## 数据文件
-
-- `$DSH_HOME/dsh-session-manager-deleted.json` — 回收站清单（`{id, title, cwd, deletedAt, wasArchived}`）。
-- `$DSH_HOME/dsh-session-manager-titles.json` — 会话标题缓存（含负缓存；实时会话经 `session/title` 事件保持最新）。
-- `$DSH_HOME/dsh-session-manager/tracking/<id>/` — 每会话的 `baseline.json` / `changes.jsonl` / `cleanup.json` / `snapshots/`（0.2.0）。
-
-以上文件都由插件自维护；tracking 目录在清理验证完成后随 Journal 一起删除，卸载插件后可手动删除其余文件。
-
-## 开发与验证
+## 八、开发与验证
 
 ```sh
 node scripts/build-client.mjs        # 组装 client.js（纯 Node，无外部依赖）
@@ -151,24 +210,33 @@ node scripts/smoke-host.mjs          # host 半功能冒烟（隔离临时 $DSH_
 node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-10 + 下载/移动/旧会话/恢复取消（130 项断言）
 ```
 
-> 0.1.2 起 `scripts/` 仅存在于源码仓库，不随 tarball 发布——请 clone 仓库后在仓库根目录运行。
+> `scripts/` 仅存在于源码仓库，不随 tarball 发布——请 clone 仓库后在仓库根目录运行。
 
-宿主半 RPC 通道为 `/dsh-session-manager`，端点：`list / archive / unarchive / delete / restore / purge / config` + `changes / resources / cleanupStatus / cleanup / track`，批量端点全部接受 `ids` 数组并返回逐条结果。
+**真机验证（v0.2.0 已完成）**：npm 发布版宿主 `@deepseek-ai/dsh@0.2.0-rc.2` + 真实 `dsh plugin add` 安装流程 + 真实 `session/create` 会话，经 RPC over HTTP 驱动端到端生命周期（基线 → 跟踪 → 删除回滚 → 冲突保护 → kill -9 后重启自动续跑）共 25 项断言全部通过；测试宿主与真实桌面数据完全隔离。
 
-## 实现说明与已知限制
+兼容目标 `engines.dsh: ">=0.1.7-rc.0"`（声明性字段，实测于 0.1.7-rc.2 与 0.2.0-rc.2）。
 
-- **源码语言**：host 半与 client 半均为纯 ESM JavaScript（JSDoc 标注），与已验证的第三方插件先例一致；未用 TypeScript 是因为本插件需在无网络的机器上构建（无编译器可用），client 半由 `scripts/build-client.mjs` 按 `src/client/` 源约定组装成 `window.__ModuleLoader__.load` CJS 单文件。生命周期模块在 `lifecycle/`（types / journal / snapshots / baseline / cleanup / manager + trackers），与 SessionManager 域逻辑（`session-manage.js`）分离。
-- **变更捕获的边界**：跟踪是「事件 + diff」混合式（requirement §六）——`tool/call` 解析 shell 命令中的 `export`/`unset`/后台进程/下载意图，`tool/result` 触发防抖工作区 diff，删除前补一次最终 diff（仅对窗口期内仍活跃的会话）。子进程内部的临时文件、管道、不落盘的副作用无法观测；工作区之外的文件（`$DSH_HOME` 自身、其他目录）不在资源边界内。
-- **环境变量**：host 半只能观测和恢复**自己进程**的 env（`scope: 'host-process'`）。工具子 shell 里的 `export` 随子进程消亡，记录它只为审计与生命周期语义；敏感名（TOKEN/SECRET/KEY/...）的值永不落 Journal，其「修改」无法自动回滚，记为冲突。
-- **依赖**：默认只带 `node_modules` 适配器（npm/pnpm/yarn 共享的磁盘布局即真相）；pip 等按 `lifecycle/trackers/deps.js` 的适配器接口扩展。卸载 = 移除包目录（不 spawn npm，离线安全、幂等）；package.json/lockfile 由文件级回滚恢复。已有依赖的自动降级/重装不做，仅报告。
-- **大文件**：超过 `trackingMaxSnapshotBytes` 的文件只记 hash 不存快照，涉及它的 modify/delete 无法自动恢复，清理报告 `snapshot-unavailable`。
-- **并发**：同一会话的清理在进程内有互斥，跨进程用 `cleanup.json` 的 owner pid + 时效判定锁归属；冲突保护使多会话改同一文件时后删者不会静默覆盖前者的外部修改。
-- **客户端 UI**：本版未改 client 半；`list` 行新增的 `tracked` 字段与新端点对旧客户端无影响。资源视图当前经 RPC 查询（`resources` / `changes` / `cleanupStatus`）。
-- **删除语义**：官方层无删除 API。软删除 = 清单标记 + 原生归档隐藏 + 资源回滚；彻底删除 = 资源回滚 + 停活动 + 移除会话目录 + 销毁 Journal（有 `locate()` 定位 + `$DSH_HOME/sessions` 路径守卫 + id 校验三重防护，拒绝越界路径）。
-- **幽灵行清理（v0.1.1 修复）**：官方层无删除 API，`api-session/removed` 只由 `session/disposed`（活会话拆卸）发出，而移除会话目录不触发拆卸——所以官方侧边栏既拿不到移除事件，`workspaceRegistry.archivedSessionIds` 与工作区 `sessionIds` 里的条目也无人清理，残留直到进程重启（此时 `bootstrap()` 重扫磁盘才剪掉）。彻底删除成功后插件改为三步失效：逐个工作区 `detachSession(id)`（未记账则空操作）→ `workspaceRegistry.unarchiveSession(id)`（不做存在性校验，条目已消失也照常解析）→ `ctx.emit('api-session/removed', id)` 转发给客户端，客户端 `handleSessionRemoved` 直接丢弃该行。因此无需重启，侧边栏即时同步。此外把 id 记入进程级已清除集合，各视图无条件过滤，作为兜底。
-  - **残留限制**：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，`sessions` 服务没有对外提供驱逐接口（`enter()` 对已存在的会话直接抛错），目录移除不会让缓存失活。进程重启后重扫磁盘会彻底清干净，但同进程内的客户端重连（如刷新 Web 页面）会重新拉到残留条目。桌面端侧边栏为长驻视图、不做整表重拉，不受影响。
-- **归档/删除无远程事件**：这两个操作后列表由 RPC 返回值本地刷新；归档会话是当前激活会话时，原生 UI 会自动切走主面板（官方行为）。
-- 兼容目标 `engines.dsh: ">=0.1.7-rc.0"`（声明性字段，实测于 0.1.7-rc.2）。
+## 九、实现说明与已知限制
+
+**源码与架构**
+
+- host 半与 client 半均为纯 ESM JavaScript（JSDoc 标注）——本插件需在无网络的机器上构建（无编译器可用），client 半由 `scripts/build-client.mjs` 按 `src/client/` 源约定组装成 `window.__ModuleLoader__.load` CJS 单文件。
+- 0.2.0 起代码分两层：`lifecycle/`（types / journal / snapshots / baseline / cleanup / manager + trackers）承载资源生命周期，`session-manage.js` 保留会话域逻辑；`index.js` 只做 RPC 接线。依赖适配器（npm/pip/…）按 `lifecycle/trackers/deps.js` 的 Adapter 接口扩展，不与核心耦合。
+
+**变更捕获的边界**
+
+- 跟踪是「事件 + diff」混合式：`tool/call` 解析 shell 命令、`tool/result` 触发防抖 diff、删除前补最终 diff。子进程内部的临时文件、管道、不落盘副作用无法观测；工作区之外的文件（`$DSH_HOME` 自身、其他目录）不在资源边界内。
+- host 半只能观测 / 恢复**自身进程**的环境变量（`scope: 'host-process'`）；工具子 shell 里的 `export` 随子进程消亡，记录仅为审计与生命周期语义。
+- 真机实测注意：宿主会为会话发出 title 等后台事件，它们会计入「活跃」判定——外部修改若落在空闲窗口（`trackingIdleWindowMs`，默认 5 分钟）内，删除时会按会话变更参与校验。需要更保守边界可将该值调小。
+- 依赖卸载 = 移除包目录（离线安全、幂等，package.json/lockfile 由文件级回滚恢复）；已有依赖的自动降级/重装不做，仅报告。pip 等其它管理器按适配器接口扩展。
+- 超过 `trackingMaxSnapshotBytes` 的文件只记哈希，无法自动恢复（清理报告 `snapshot-unavailable`）。
+
+**面板语义（0.1.x 起）**
+
+- 删除语义：官方层无删除 API。软删除 = 清单标记 + 原生归档隐藏（0.1.4 起会话目录同样被移除，恢复仅还原列表行、不还原磁盘数据）；彻底删除 = 资源回滚 + 停活动 + 移除会话目录 + 销毁 Journal（有 `locate()` 定位 + `$DSH_HOME/sessions` 路径守卫 + id 校验三重防护，拒绝越界路径）。
+- 幽灵行清理（v0.1.1 修复）：移除会话目录不触发拆卸，官方侧边栏拿不到移除事件——彻底删除后插件改为三步失效（逐工作区 `detachSession` → `unarchiveSession` → `api-session/removed` 转发），无需重启即消失。残留限制：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，同进程内重连（如刷新页面）可能重新拉到残留条目，进程重启后彻底清理。
+- 归档/删除无远程事件：这两个操作后列表由 RPC 返回值本地刷新；归档当前激活会话时原生 UI 会自动切走主面板（官方行为）。
+- client 半本版未改：资源视图（`resources` / `changes` / `cleanupStatus`）当前经 RPC 查询，尚未接入面板 UI。
 
 ## 变更记录
 
@@ -189,12 +257,12 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 - **安全**：环境变量敏感名值脱敏（只存存在性 + SHA-256 指纹）；快照按大小上限；Journal 在清理验证前不可销毁。
 - **旧会话兼容**：无 tracking 目录的会话按 legacy 处理（`legacy-untracked`），只做原有删除路径，不追溯归属任何工作区资源。
 - **测试**：新增 `scripts/smoke-lifecycle.mjs`（130 项断言，覆盖需求 Case 1-10 与下载归因、移动/重命名、旧会话、恢复取消清理）；`scripts/smoke-host.mjs` 66 项断言保持通过。
-- **真机验证**：npm 发布版宿主 `@deepseek-ai/dsh@0.2.0-rc.2` + 真实 `dsh plugin add` 安装流程 + 真实 `session/create` 会话，经 RPC over HTTP 驱动端到端生命周期（基线 → 跟踪 → 删除回滚 → 冲突保护 → 崩溃恢复续跑）共 25 项断言全部通过；测试宿主与真实桌面数据完全隔离。
+- **真机验证**：npm 发布版宿主 `@deepseek-ai/dsh@0.2.0-rc.2` + 真实 `dsh plugin add` 安装流程 + 真实 `session/create` 会话，经 RPC over HTTP 驱动端到端生命周期（基线 → 跟踪 → 删除回滚 → 冲突保护 → kill -9 后重启自动续跑）共 25 项断言全部通过；测试宿主与真实桌面数据完全隔离。
 
 ### 0.1.5（重构版，对外行为与接口不变）
 
 - **修复 volatile 配置读取**（对照开发文档 §3.5「volatile 字段用 `.get()` 读取」）：0.1.4 起 4 个配置字段标了 `.volatile()`，但 host 半仍按普通值直读——schemastery 交给 `apply` 的是 `{ get() }` 稳定引用，导致 `confirmPurge === true` 恒为 false（**彻底删除确认框不再弹出**）、`autoRefresh` 恒为 false（自动刷新永不启用）、批量 `maxBatchSize` 上限失效、`titleFetchLimit` 经 `Math.max(0, 引用)` 得 NaN（冷会话标题永不补拉）。现在每次 RPC 操作前经 `configValue` / `readConfig` 快照解析（与 one-click-restart 同一套模式），volatile 变更无需重挂载即可在下次请求生效。
-- **修复回退直连路由的 413 分支**：`readRequestBody(req)` 漏传 `res`，超限请求注释中描述的「立即以 413 终止响应」永远不会执行；现已传入 `res`。
+- **修复回退直连路由的 413 分支**：`readRequestBody` 漏传 `res`，超限请求注释中描述的「立即以 413 终止响应」永远不会执行；现已传入 `res`。
 - **消除死代码**：`softDeleteSessions` 的 `purge` 选项分支无任何调用方（永久删除由 `purgeSessions` → `removeSessionDir` 承担），移除。
 - **消除重复**：`archiveSessions` / `unarchiveSessions` 合并为共享的 `mutateArchiveState`；`withBatch` 改为常规 async 并去掉多余的 `Promise.resolve` 包装。
 - host/client 两半的 RPC 契约、端点、错误码、配置字段与默认值全部不变。
