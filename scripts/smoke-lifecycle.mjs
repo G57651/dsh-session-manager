@@ -83,8 +83,14 @@ function bootWith(configOverrides = {}) {
   hostModule.apply(ctx, config)
   return {
     dispatch: captured.dispatch,
+    emitTo(name, ...args) {
+      for (const listener of eventListeners[name] ?? []) listener(...args)
+    },
     emit(sessionId, event) {
-      for (const listener of eventListeners['session/event'] ?? []) listener({ id: sessionId }, event)
+      this.emitTo('session/event', { id: sessionId }, event)
+    },
+    sessionCreated(sessionId) {
+      this.emitTo('session/created', { id: sessionId })
     },
     async toolCall(sessionId, name, args) {
       this.emit(sessionId, { type: 'tool/call', data: { turn: 1, step: 1, callId: 'c1', name, arguments: JSON.stringify(args) }, time: Date.now() })
@@ -141,6 +147,67 @@ const manage = await import(new URL('../session-manage.js', import.meta.url)).th
 
 const app = boot()
 const dispatch = app.dispatch
+
+// --- event-driven path (the REAL usage flow, no explicit track calls) ----------
+{
+  const id = 'session-event'
+  const cwd = makeSession(id)
+  app.sessionCreated(id)
+  ok(await waitFor(() => existsSync(trackingDir(id))), 'event: session/created baselines the session immediately')
+
+  // the agent creates a file; only the tool/result event fires (no track RPC)
+  writeFileSync(join(cwd, 'live.txt'), 'live')
+  await app.toolResult(id)
+  ok(await waitFor(async () => (await call(dispatch, 'changes', { id })).value.changes.some(record => record.action === 'created' && record.resource.path === 'live.txt')), 'event: debounced diff journals the created file')
+
+  // deleting the session removes what it created — the core promise
+  const result = await call(dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.ok === true && result.value.results[0]?.cleanup?.state === 'rollback_verified', `event: delete cleans up (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
+  ok(!existsSync(join(cwd, 'live.txt')), 'event: session-created file removed by delete')
+  removeSessionFromCorpus(id)
+}
+
+// --- list self-heal: opening the panel baselines untracked rows -----------------
+{
+  const id = 'session-listheal'
+  const cwd = makeSession(id)
+  const list = await call(dispatch, 'list', { view: 'all' })
+  ok(list.value.rows.find(row => row.id === id) !== undefined, 'self-heal: session listed')
+  ok(await waitFor(async () => (await call(dispatch, 'list', { view: 'all' })).value.rows.find(row => row.id === id)?.tracked === true), 'self-heal: list request baselines the row (tracked=true)')
+  removeSessionFromCorpus(id)
+}
+
+// --- final diff rescues a missed debounce (the "no effect" report scenario) -----
+{
+  const id = 'session-finaldiff'
+  const cwd = makeSession(id)
+  app.sessionCreated(id)
+  await waitFor(() => existsSync(trackingDir(id)))
+  writeFileSync(join(cwd, 'late.txt'), 'late')
+  await app.toolResult(id) // fresh activity; debounce deliberately NOT awaited
+  const result = await call(dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.ok === true && result.value.results[0]?.cleanup?.state === 'rollback_verified', `final-diff: delete with missed debounce still cleans (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
+  ok(!existsSync(join(cwd, 'late.txt')), 'final-diff: removal-time diff caught the file the event diff missed')
+  removeSessionFromCorpus(id)
+}
+
+// --- final diff protects external edits made long after the session went quiet --
+{
+  const id = 'session-suspect'
+  const cwd = makeSession(id)
+  app.sessionCreated(id)
+  await waitFor(() => existsSync(trackingDir(id)))
+  // something else writes a file long after the session went quiet: backdate
+  // the persisted activity clock (a restart loses the in-memory freshness)
+  writeFileSync(join(trackingDir(id), 'activity.json'), `${JSON.stringify({ lastEventAt: Date.now() - 10 * 60 * 1000 })}\n`)
+  writeFileSync(join(cwd, 'foreign.txt'), 'foreign')
+  // delete through a SECOND instance (fresh in-memory clock, like a restart)
+  const restarted = boot()
+  const result = await call(restarted.dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.ok === true, 'suspect: delete ok')
+  ok(existsSync(join(cwd, 'foreign.txt')), 'suspect: change captured long after session went quiet is NOT rolled back')
+  removeSessionFromCorpus(id)
+}
 
 // --- Case 1: session creates a file → delete removes it, journal gone ---------
 {
@@ -353,7 +420,7 @@ const dispatch = app.dispatch
   removeSessionFromCorpus(id)
 }
 
-// --- Case 10: external conflict → detected, not silently overwritten -----------
+// --- Case 10: external edits after the session went quiet are preserved ---------
 {
   const id = 'session-case10'
   const cwd = makeSession(id)
@@ -361,24 +428,28 @@ const dispatch = app.dispatch
   await call(dispatch, 'track', { ids: [id] })
   writeFileSync(join(cwd, 'config.json'), 'B') // session's change
   await call(dispatch, 'track', { ids: [id] })
-  writeFileSync(join(cwd, 'config.json'), 'C') // someone else's later change
+  writeFileSync(join(cwd, 'config.json'), 'C') // someone else's, long after
 
   const result = await call(dispatch, 'delete', { ids: [id] })
   const summary = result.value.results[0]?.cleanup
-  ok(summary?.ok === false && summary.state === 'rollback_failed', `case10: cleanup reported failure, got ${JSON.stringify(summary)}`)
-  ok(summary?.conflicts >= 1, 'case10: conflict recorded')
+  ok(summary?.ok === true && summary.state === 'rollback_verified', `case10: cleanup converges (got ${JSON.stringify(summary)})`)
   ok(read(join(cwd, 'config.json')) === 'C', `case10: external change NOT overwritten (still C), got ${read(join(cwd, 'config.json'))}`)
-  ok(existsSync(trackingDir(id)), 'case10: journal kept for retry/inspection')
+  removeSessionFromCorpus(id)
+}
 
-  const status = await call(dispatch, 'cleanupStatus', { ids: [id] })
-  ok(status.value.results[0]?.cleanup?.state === 'rollback_failed', 'case10: cleanupStatus reports rollback_failed')
-  ok(status.value.results[0]?.cleanup?.conflicts?.[0]?.reason === 'externally-modified-after-session', 'case10: conflict reason is explicit')
-
-  // force cleanup: user's explicit decision → pre-session content wins
+// --- Case 10b: force mode is the explicit user decision that DOES overwrite ------
+{
+  const id = 'session-case10f'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'config.json'), 'A')
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'config.json'), 'B')
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'config.json'), 'C')
   const forceApp = forceBoot()
-  const forced = await call(forceApp.dispatch, 'cleanup', { ids: [id], mode: 'resume' })
-  ok(forced.value.results[0]?.ok === true, `case10: forced resume ok, got ${JSON.stringify(forced.value.results[0])}`)
-  ok(read(join(cwd, 'config.json')) === 'A', `case10: force restored pre-session content A, got ${read(join(cwd, 'config.json'))}`)
+  const result = await call(forceApp.dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.cleanup?.state === 'rollback_verified', `case10-force: cleanup verified, got ${JSON.stringify(result.value.results[0]?.cleanup)}`)
+  ok(read(join(cwd, 'config.json')) === 'A', `case10-force: pre-session content A restored, got ${read(join(cwd, 'config.json'))}`)
   removeSessionFromCorpus(id)
 }
 

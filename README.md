@@ -127,7 +127,7 @@ host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返
 | `autoCleanup` | `true` | delete/purge 时执行资源回滚 | **0.2.0** |
 | `autoResume` | `true` | 启动时续跑未完成清理 | **0.2.0** |
 | `trackingPollMs` | `0` | 周期性 diff 间隔；0 = 仅事件驱动 + 删除前最终 diff | **0.2.0** |
-| `trackingIdleWindowMs` | `300000` | 会话空闲多久后视为「已安静」 | **0.2.0** |
+| `trackingIdleWindowMs` | `300000` | 最终 diff 可疑阈值：会话安静超过该时长后，删除时最终 diff 捕获的变更按外部修改保护、不自动回滚 | **0.2.0** |
 | `trackingMaxFiles` | `5000` | 基线/diff 扫描文件数上限 | **0.2.0** |
 | `trackingMaxDepth` | `12` | 基线/diff 扫描深度上限 | **0.2.0** |
 | `trackingMaxSnapshotBytes` | `8388608` | 单文件 before 内容快照上限 | **0.2.0** |
@@ -239,6 +239,17 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 - client 半本版未改：资源视图（`resources` / `changes` / `cleanupStatus`）当前经 RPC 查询，尚未接入面板 UI。
 
 ## 变更记录
+
+### 0.2.1（跟踪自愈 + 资源视图面板）
+
+- **修复真机场景下删除不清理的核心缺口**：0.2.0 的事件驱动跟踪依赖 `tool/result` 触发的防抖 diff，插件重挂载 / 宿主重启后防抖丢失、或会话从未被观测时，删除会被判为 `legacy-untracked` 而跳过清理。0.2.1 三路闭合：
+  - 监听宿主 `session/created` 事件——新会话在创建瞬间（工作区还是干净时）立即建立基线；
+  - 启动时对宿主语料内的全部已知会话做**错峰基线扫描**；
+  - `list` RPC 对每个行内会话自愈基线（已存在时只是一次 stat 读）——打开一次面板即可补齐跟踪。
+- **删除时的最终 diff 不再被空闲窗口跳过**（0.2.0 的门控会让闲置会话删除时不清理——正是"删了没效果"的另一半原因）。改为**总是执行**，并把最终 diff 捕获的每条记录标记 `{finalDiff, idleMs}`：会话安静超过 `trackingIdleWindowMs` 后才出现的变更按**外部修改保护**（安全模式跳过并在报告中标注 `external-suspect`；`conflictMode: 'force'` 才覆盖）。活动时间持久化到 `activity.json`，判定跨重启 / 重挂载依然成立。
+- **修复基线扫描与崩溃恢复的竞争**：恢复流程完成后写入 purge 墓碑（与 purge 流程一致），基线扫描跳过存在未完成清理（RESUMABLE）或已被 purge 的会话——不再出现"恢复刚销毁的 Journal 又被扫描重建"。
+- **新增面板资源视图（需求）**：每行新增「资源」按钮 → 弹窗按类型分组展示该会话的全部资源（文件 / 配置 / 下载 / 目录 / 依赖 / 环境变量 / 进程），逐项标注归属与当前状态，含基线摘要、清理状态与冲突提示；中英双语。
+- **测试**：`smoke-lifecycle.mjs` 增至 **181 项断言**，新增事件驱动路径（session/created → tool/result 防抖 diff → 删除清理）、final diff 挽救漏 diff、可疑记录保护外部修改、force 覆盖、列表自愈等用例；`smoke-host.mjs` 66 项保持通过。
 
 ### 0.2.0（Session Resource Lifecycle Manager）
 

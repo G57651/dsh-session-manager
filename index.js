@@ -336,6 +336,7 @@ export function apply(ctx, config) {
   const resourceManager = createSessionResourceManager({
     dshHome,
     ctx,
+    manifest,
     getConfig: () => readConfig(config),
     logger,
   })
@@ -344,7 +345,9 @@ export function apply(ctx, config) {
   // session-event; fold them into the cache so cold rows stay current.
   // Every other session-event feeds the resource lifecycle: tool/call carries
   // the command context (env mutations, spawns, download intents), tool/result
-  // schedules the debounced workspace diff (requirement §六).
+  // schedules the debounced workspace diff (requirement §六). session/created
+  // baselines a brand-new session while its workspace is still pristine —
+  // the earliest attribution anchor available.
   ctx.on('session/event', (session, event) => {
     if (event?.type === 'session/title') {
       const id = session?.id
@@ -360,10 +363,19 @@ export function apply(ctx, config) {
     void resourceManager.observeEvent(id, event)
   })
 
+  ctx.on('session/created', (session) => {
+    const id = session?.id
+    if (typeof id !== 'string' || id === '') return
+    void resourceManager.observeSessionCreated(id)
+  })
+
   // Crash recovery: finish cleanups an earlier process left unfinished
-  // (requirement §八). Fire-and-forget — a resume failure must not block boot.
-  void resourceManager.bootstrap().then(resumed => {
+  // (requirement §八), then baseline every session the host already knows —
+  // a boot sweep that closes the "session existed before the plugin loaded"
+  // attribution gap. Fire-and-forget: neither may block boot.
+  void resourceManager.bootstrap().then(({ resumed, baselined }) => {
     if (resumed.length > 0) logger?.info?.(`[dsh-session-manager] resumed ${resumed.length} unfinished cleanup/resume task(s)`)
+    if (baselined > 0) logger?.info?.(`[dsh-session-manager] baseline sweep started for ${baselined} known session(s)`)
   })
 
   // Optional periodic sweep (requirement §六 step 3): event-driven diffs plus
@@ -408,6 +420,10 @@ export function apply(ctx, config) {
           // annotate rows with lifecycle tracking state (additive, old clients ignore it)
           await Promise.all(value.rows.map(async row => {
             row.tracked = await resourceManager.isTracked(row.id).catch(() => false)
+            // self-heal: every list request re-arms baselines for rows that
+            // lost theirs (plugin remount, host restart) so attribution starts
+            // as early as possible; a no-op stat read when the baseline exists
+            void resourceManager.ensureBaseline(row.id).catch(() => {})
           }))
           return { ok: true, value: { view, ...value } }
         } catch (error) {

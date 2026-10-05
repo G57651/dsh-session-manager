@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		var __modules = {
 			"./styles.css.js": function (require, module, exports) {
-				module.exports = { cssText: "/* dsh-session-manager — client styles, injected as a style tag by apply().\n   Class prefix .dsm- avoids collisions with the host. Colors, borders, and\n   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and\n   dark follow the host theme automatically; no theme selectors live here. */\n\n.dsm-page {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  box-sizing: border-box;\n  height: 100%;\n  min-width: 0;\n  min-height: 0;\n  padding: 24px clamp(20px, 4vw, 44px) 40px;\n  overflow: hidden;\n}\n\n.dsm-head {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n\n.dsm-headRow {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.dsm-title {\n  margin: 0;\n  font-size: 20px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-headActions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.dsm-tabs {\n  width: min(460px, 100%);\n}\n\n.dsm-tabCount {\n  opacity: 0.65;\n}\n\n.dsm-list {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  border: 1px solid var(--dsw-alias-border-l1);\n  border-radius: var(--dsw-radius-md);\n  overflow-x: hidden;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-row {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  transition: background 120ms ease;\n}\n\n.dsm-row:last-child {\n  border-bottom: none;\n}\n\n.dsm-row:hover,\n.dsm-rowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-rowClickable {\n  cursor: pointer;\n}\n\n.dsm-checkCell {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n/* Keep the primitive checkbox's accessible label but hide its visible text:\n   the row title right next to it already says what this is. */\n.dsm-checkCell label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-rowMain {\n  display: flex;\n  flex: 1;\n  min-width: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.dsm-rowTitleLine {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-rowTitle {\n  overflow: hidden;\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowTitleMuted {\n  color: var(--dsw-alias-label-secondary);\n  font-weight: 400;\n}\n\n.dsm-pill {\n  flex: none;\n  padding: 1px 8px;\n  font-size: 11px;\n  line-height: 16px;\n  color: var(--dsw-alias-label-secondary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 999px;\n}\n\n.dsm-pillRunning {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-pillMissing {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-rowMeta {\n  overflow: hidden;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowActions {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 4px;\n  opacity: 0;\n  transition: opacity 120ms ease;\n}\n\n.dsm-row:hover .dsm-rowActions,\n.dsm-row:focus-within .dsm-rowActions {\n  opacity: 1;\n}\n\n.dsm-dangerButton.dsm-dangerButton {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-dangerFill.dsm-dangerFill {\n  background: var(--dsw-alias-state-error-primary);\n  color: var(--dsw-alias-bg-base);\n}\n\n.dsm-batchBar {\n  position: sticky;\n  bottom: 0;\n  z-index: 2;\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin-top: auto;\n  padding: 10px 14px;\n  background: var(--dsw-alias-bg-layer-1);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);\n}\n\n.dsm-batchCount {\n  flex: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-batchOps {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-stateBox {\n  display: flex;\n  flex: 1;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 56px 24px;\n  text-align: center;\n}\n\n.dsm-stateIcon {\n  color: var(--dsw-alias-label-tertiary);\n  opacity: 0.7;\n}\n\n.dsm-stateTitle {\n  margin: 0;\n  font-size: 14px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-stateHint {\n  margin: 0;\n  max-width: 420px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n\n.dsm-notice {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 8px 12px;\n  font-size: 12px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-noticeError {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-noticeInfo {\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-noticeClose {\n  flex: none;\n  padding: 0 4px;\n  font-size: 14px;\n  line-height: 1;\n  color: inherit;\n  background: none;\n  border: none;\n  cursor: pointer;\n}\n\n.dsm-purgeList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-purgeList li {\n  padding: 3px 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-skeletonRow {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 12px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n}\n\n.dsm-skeletonRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-skeletonBar {\n  height: 10px;\n  border-radius: 4px;\n  background: var(--dsw-alias-interactive-bg-hover);\n  animation: dsm-pulse 1.4s ease-in-out infinite;\n}\n\n.dsm-skeletonBarShort {\n  width: 40%;\n}\n\n@keyframes dsm-pulse {\n  0%,\n  100% {\n    opacity: 0.55;\n  }\n  50% {\n    opacity: 1;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-skeletonBar {\n    animation: none;\n  }\n\n  .dsm-row,\n  .dsm-rowActions {\n    transition: none;\n  }\n}\n" };
+				module.exports = { cssText: "/* dsh-session-manager — client styles, injected as a style tag by apply().\n   Class prefix .dsm- avoids collisions with the host. Colors, borders, and\n   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and\n   dark follow the host theme automatically; no theme selectors live here. */\n\n.dsm-page {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  box-sizing: border-box;\n  height: 100%;\n  min-width: 0;\n  min-height: 0;\n  padding: 24px clamp(20px, 4vw, 44px) 40px;\n  overflow: hidden;\n}\n\n.dsm-head {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n\n.dsm-headRow {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.dsm-title {\n  margin: 0;\n  font-size: 20px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-headActions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.dsm-tabs {\n  width: min(460px, 100%);\n}\n\n.dsm-tabCount {\n  opacity: 0.65;\n}\n\n.dsm-list {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  border: 1px solid var(--dsw-alias-border-l1);\n  border-radius: var(--dsw-radius-md);\n  overflow-x: hidden;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-row {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  transition: background 120ms ease;\n}\n\n.dsm-row:last-child {\n  border-bottom: none;\n}\n\n.dsm-row:hover,\n.dsm-rowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-rowClickable {\n  cursor: pointer;\n}\n\n.dsm-checkCell {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n/* Keep the primitive checkbox's accessible label but hide its visible text:\n   the row title right next to it already says what this is. */\n.dsm-checkCell label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-rowMain {\n  display: flex;\n  flex: 1;\n  min-width: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.dsm-rowTitleLine {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-rowTitle {\n  overflow: hidden;\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowTitleMuted {\n  color: var(--dsw-alias-label-secondary);\n  font-weight: 400;\n}\n\n.dsm-pill {\n  flex: none;\n  padding: 1px 8px;\n  font-size: 11px;\n  line-height: 16px;\n  color: var(--dsw-alias-label-secondary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 999px;\n}\n\n.dsm-pillRunning {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-pillMissing {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-rowMeta {\n  overflow: hidden;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowActions {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 4px;\n  opacity: 0;\n  transition: opacity 120ms ease;\n}\n\n.dsm-row:hover .dsm-rowActions,\n.dsm-row:focus-within .dsm-rowActions {\n  opacity: 1;\n}\n\n.dsm-dangerButton.dsm-dangerButton {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-dangerFill.dsm-dangerFill {\n  background: var(--dsw-alias-state-error-primary);\n  color: var(--dsw-alias-bg-base);\n}\n\n.dsm-batchBar {\n  position: sticky;\n  bottom: 0;\n  z-index: 2;\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin-top: auto;\n  padding: 10px 14px;\n  background: var(--dsw-alias-bg-layer-1);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);\n}\n\n.dsm-batchCount {\n  flex: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-batchOps {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-stateBox {\n  display: flex;\n  flex: 1;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 56px 24px;\n  text-align: center;\n}\n\n.dsm-stateIcon {\n  color: var(--dsw-alias-label-tertiary);\n  opacity: 0.7;\n}\n\n.dsm-stateTitle {\n  margin: 0;\n  font-size: 14px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-stateHint {\n  margin: 0;\n  max-width: 420px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n\n.dsm-notice {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 8px 12px;\n  font-size: 12px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-noticeError {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-noticeInfo {\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-noticeClose {\n  flex: none;\n  padding: 0 4px;\n  font-size: 14px;\n  line-height: 1;\n  color: inherit;\n  background: none;\n  border: none;\n  cursor: pointer;\n}\n\n.dsm-purgeList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-purgeList li {\n  padding: 3px 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-skeletonRow {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 12px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n}\n\n.dsm-skeletonRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-skeletonBar {\n  height: 10px;\n  border-radius: 4px;\n  background: var(--dsw-alias-interactive-bg-hover);\n  animation: dsm-pulse 1.4s ease-in-out infinite;\n}\n\n.dsm-skeletonBarShort {\n  width: 40%;\n}\n\n@keyframes dsm-pulse {\n  0%,\n  100% {\n    opacity: 0.55;\n  }\n  50% {\n    opacity: 1;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-skeletonBar {\n    animation: none;\n  }\n\n  .dsm-row,\n  .dsm-rowActions {\n    transition: none;\n  }\n}\n\n/* --- resource detail modal (0.2.x) ---------------------------------------- */\n\n.dsm-resBody {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  max-height: 56vh;\n  overflow: auto;\n  min-width: min(560px, 72vw);\n}\n\n.dsm-resMetaLine {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: baseline;\n  gap: 4px 14px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resCwd {\n  overflow-wrap: anywhere;\n}\n\n.dsm-resConflicts {\n  padding: 8px 10px;\n  font-size: 12px;\n  color: var(--dsw-alias-state-error-primary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resGroup {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n}\n\n.dsm-resGroupTitle {\n  margin: 6px 0 2px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resGroupList {\n  display: flex;\n  flex-direction: column;\n}\n\n.dsm-resRow {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 5px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\n}\n\n.dsm-resRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-resMain {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.dsm-resId {\n  font-size: 13px;\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resExtra {\n  margin-top: 1px;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resPills {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-pillOwn {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-resHint {\n  margin: 0;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resHintError {\n  color: var(--dsw-alias-state-error-primary);\n}\n" };
 			},
 			"./locales.js": function (require, module, exports) {
 
@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
 				  'action.delete': '删除',
 				  'action.restore': '恢复',
 				  'action.purge': '彻底删除',
+				  'action.resources': '资源',
 				  'batch.bar': '批量操作',
 				  'batch.selected': '已选 {n} 项',
 				  'batch.all': '全选',
@@ -69,6 +70,45 @@ window.__ModuleLoader__.load({
 				  'purge.description': '所选会话的全部记录将从磁盘移除，此操作无法恢复。',
 				  'purge.confirm': '彻底删除',
 				  'purge.more': '以及另外 {n} 个会话',
+				  'res.title': '会话资源',
+				  'res.loading': '正在加载资源…',
+				  'res.cleanup': '清理状态',
+				  'res.cleanup.active': '跟踪中',
+				  'res.cleanup.requested': '待清理',
+				  'res.cleanup.running': '清理中',
+				  'res.cleanup.failed': '清理未完成（存在冲突）',
+				  'res.cleanup.verified': '已回滚',
+				  'res.cleanup.sessionDeleted': '会话已删除',
+				  'res.cleanup.complete': '已完成',
+				  'res.cleanup.none': '无清理记录',
+				  'res.cleanup.legacy': '未跟踪',
+				  'res.baselineFiles': '基线文件 {n} 个',
+				  'res.truncated': '工作区过大，部分内容未纳入跟踪',
+				  'res.conflicts': '⚠ 有 {n} 个资源因外部改动被保护而未回滚，详见 cleanupStatus',
+				  'res.legacy': '该会话没有资源跟踪记录（旧版本创建），无法展示它产生过的资源。',
+				  'res.empty': '没有记录到资源变化。',
+				  'res.lastAction': '动作',
+				  'res.group.file': '文件',
+				  'res.group.configuration': '配置',
+				  'res.group.download': '下载',
+				  'res.group.directory': '目录',
+				  'res.group.dependency': '依赖',
+				  'res.group.env': '环境变量',
+				  'res.group.process': '进程',
+				  'res.own.created': '会话新建',
+				  'res.own.modified': '会话修改',
+				  'res.own.deleted': '会话删除',
+				  'res.own.installed': '会话安装',
+				  'res.own.configured': '会话配置',
+				  'res.own.preexisting': '原有',
+				  'res.status.matches': '与基线一致',
+				  'res.status.differs': '已偏离基线',
+				  'res.status.present': '存在',
+				  'res.status.missing': '已不存在',
+				  'res.status.actions': '见动作',
+				  'res.status.info': '记录',
+				  'res.status.unknown': '未知',
+				  'res.status.unreadable': '不可读',
 				}
 
 				const en = {
@@ -89,6 +129,7 @@ window.__ModuleLoader__.load({
 				  'action.delete': 'Delete',
 				  'action.restore': 'Restore',
 				  'action.purge': 'Delete forever',
+				  'action.resources': 'Resources',
 				  'batch.bar': 'Batch actions',
 				  'batch.selected': '{n} selected',
 				  'batch.all': 'Select all',
@@ -126,6 +167,45 @@ window.__ModuleLoader__.load({
 				  'purge.description': 'Their records will be removed from disk. This cannot be undone.',
 				  'purge.confirm': 'Delete forever',
 				  'purge.more': 'and {n} more',
+				  'res.title': 'Session resources',
+				  'res.loading': 'Loading resources…',
+				  'res.cleanup': 'Cleanup',
+				  'res.cleanup.active': 'Tracking',
+				  'res.cleanup.requested': 'Cleanup requested',
+				  'res.cleanup.running': 'Cleaning up',
+				  'res.cleanup.failed': 'Cleanup incomplete (conflicts)',
+				  'res.cleanup.verified': 'Rolled back',
+				  'res.cleanup.sessionDeleted': 'Session deleted',
+				  'res.cleanup.complete': 'Complete',
+				  'res.cleanup.none': 'No cleanup recorded',
+				  'res.cleanup.legacy': 'Untracked',
+				  'res.baselineFiles': '{n} baseline files',
+				  'res.truncated': 'Workspace too large; part of it is not tracked',
+				  'res.conflicts': '⚠ {n} resource(s) preserved because of external edits — see cleanupStatus',
+				  'res.legacy': 'This session has no resource tracking (created on an older version); what it produced cannot be shown.',
+				  'res.empty': 'No resource changes recorded.',
+				  'res.lastAction': 'Actions',
+				  'res.group.file': 'Files',
+				  'res.group.configuration': 'Configuration',
+				  'res.group.download': 'Downloads',
+				  'res.group.directory': 'Directories',
+				  'res.group.dependency': 'Dependencies',
+				  'res.group.env': 'Environment variables',
+				  'res.group.process': 'Processes',
+				  'res.own.created': 'Created by session',
+				  'res.own.modified': 'Modified by session',
+				  'res.own.deleted': 'Deleted by session',
+				  'res.own.installed': 'Installed by session',
+				  'res.own.configured': 'Configured by session',
+				  'res.own.preexisting': 'Pre-existing',
+				  'res.status.matches': 'Matches baseline',
+				  'res.status.differs': 'Differs from baseline',
+				  'res.status.present': 'Present',
+				  'res.status.missing': 'Gone',
+				  'res.status.actions': 'See actions',
+				  'res.status.info': 'Recorded',
+				  'res.status.unknown': 'Unknown',
+				  'res.status.unreadable': 'Unreadable',
 				}
 
 
@@ -182,6 +262,8 @@ window.__ModuleLoader__.load({
 		    restore: ids => call('restore', { ids }),
 		    purge: ids => call('purge', { ids }),
 		    getConfig: () => call('config', {}),
+		    resources: id => call('resources', { id }),
+		    cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
 		  }
 		}
 
@@ -282,6 +364,24 @@ window.__ModuleLoader__.load({
 		      },
 		      openConfirmPurge: (draft, ids) => { draft.confirmPurgeIds = ids },
 		      closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
+		      // resource detail modal (0.2.x): one open detail at a time
+		      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null } },
+		      setDetailData: (draft, data) => {
+		        if (draft.detail !== null && draft.detail.id === data?.sessionId) {
+		          draft.detail.loading = false
+		          draft.detail.data = data
+		        }
+		      },
+		      setDetailStatus: (draft, status) => {
+		        if (draft.detail !== null) draft.detail.status = status
+		      },
+		      setDetailError: (draft, message) => {
+		        if (draft.detail !== null) {
+		          draft.detail.loading = false
+		          draft.detail.error = message
+		        }
+		      },
+		      closeDetail: (draft) => { draft.detail = null },
 		    },
 		  })
 		}
@@ -292,6 +392,7 @@ window.__ModuleLoader__.load({
 
 		function createController({ ctx, api, instance }) {
 		  let loadSeq = 0
+		  let detailSeq = 0
 		  let refreshTimer
 		  let eventDisposers = []
 
@@ -364,6 +465,25 @@ window.__ModuleLoader__.load({
 		    return true
 		  }
 
+		  /** Load one session's resource view + cleanup status into the detail modal. */
+		  async function openResources(id) {
+		    const seq = ++detailSeq
+		    instance.actions.openDetail(id)
+		    const [resources, status] = await Promise.all([
+		      api.resources(id),
+		      api.cleanupStatus(id).catch(() => null),
+		    ])
+		    if (seq !== detailSeq) return
+		    if (resources?.ok === true) {
+		      instance.actions.setDetailData(resources.value)
+		    } else {
+		      console.warn('[dsh-session-manager] resources failed:', describeError(resources?.error))
+		      instance.actions.setDetailError(formatError(resources?.error))
+		      return
+		    }
+		    if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
+		  }
+
 		  function dispose() {
 		    if (refreshTimer !== undefined) clearTimeout(refreshTimer)
 		    for (const disposer of eventDisposers.splice(0)) {
@@ -371,7 +491,7 @@ window.__ModuleLoader__.load({
 		    }
 		  }
 
-		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, dispose }
+		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, dispose }
 		}
 
 		// ---------------------------------------------------------------------------
@@ -481,9 +601,11 @@ window.__ModuleLoader__.load({
 
 		  const quickActions = []
 		  if (row.deleted === true) {
+		    quickActions.push(h(Button, { key: 'resources', variant: 'ghost', size: 'sm', onClick: () => void controller.openResources(row.id) }, t('action.resources')))
 		    quickActions.push(h(Button, { key: 'restore', variant: 'ghost', size: 'sm', icon: h(IconUnarchiveOutlineRegular, { size: 14 }), onClick: () => void controller.runOp('restore', [row.id], t) }, t('action.restore')))
 		    quickActions.push(h(Button, { key: 'purge', variant: 'ghost', size: 'sm', className: 'dsm-dangerButton', icon: h(IconTrashOutlineRegular, { size: 14 }), 'aria-label': t('action.purge'), onClick: () => purgeOne(row.id) }))
 		  } else {
+		    quickActions.push(h(Button, { key: 'resources', variant: 'ghost', size: 'sm', onClick: () => void controller.openResources(row.id) }, t('action.resources')))
 		    if (row.archived === true) {
 		      quickActions.push(h(Button, { key: 'unarchive', variant: 'ghost', size: 'sm', icon: h(IconUnarchiveOutlineRegular, { size: 14 }), onClick: () => void controller.runOp('unarchive', [row.id], t) }, t('action.unarchive')))
 		    } else {
@@ -579,6 +701,132 @@ window.__ModuleLoader__.load({
 		  )
 		}
 
+		// ---------------------------------------------------------------------------
+		// Resource detail modal — "what did this session produce?"
+		// Backed by the `resources` + `cleanupStatus` RPCs; groups the session's
+		// baseline and journal-derived resources by type with ownership/status pills.
+		// ---------------------------------------------------------------------------
+
+		const RES_GROUP_ORDER = ['file', 'configuration', 'download', 'directory', 'dependency', 'environment_variable', 'process']
+		const RES_GROUP_KEY = {
+		  file: 'res.group.file',
+		  configuration: 'res.group.configuration',
+		  download: 'res.group.download',
+		  directory: 'res.group.directory',
+		  dependency: 'res.group.dependency',
+		  environment_variable: 'res.group.env',
+		  process: 'res.group.process',
+		}
+		const RES_OWNERSHIP_KEY = {
+		  session_created: 'res.own.created',
+		  session_modified: 'res.own.modified',
+		  session_deleted: 'res.own.deleted',
+		  session_installed: 'res.own.installed',
+		  session_configured: 'res.own.configured',
+		  preexisting: 'res.own.preexisting',
+		}
+		const RES_STATUS_KEY = {
+		  'matches-baseline': 'res.status.matches',
+		  'differs-from-baseline': 'res.status.differs',
+		  present: 'res.status.present',
+		  missing: 'res.status.missing',
+		  'see-actions': 'res.status.actions',
+		  informational: 'res.status.info',
+		  unknown: 'res.status.unknown',
+		  unreadable: 'res.status.unreadable',
+		}
+		const RES_CLEANUP_KEY = {
+		  active: 'res.cleanup.active',
+		  delete_requested: 'res.cleanup.requested',
+		  rolling_back: 'res.cleanup.running',
+		  rollback_failed: 'res.cleanup.failed',
+		  rollback_verified: 'res.cleanup.verified',
+		  session_deleted: 'res.cleanup.sessionDeleted',
+		  complete: 'res.cleanup.complete',
+		  none: 'res.cleanup.none',
+		  legacy: 'res.cleanup.legacy',
+		}
+
+		function ownershipPill(ownership, t) {
+		  const key = RES_OWNERSHIP_KEY[ownership]
+		  if (key === undefined) return null
+		  return h(Badge, { key: 'own', label: t(key), className: ownership === 'preexisting' ? undefined : 'dsm-pillOwn' })
+		}
+
+		function statusPill(status, t) {
+		  const key = RES_STATUS_KEY[status]
+		  if (key === undefined) return null
+		  const positive = status === 'matches-baseline' || status === 'present'
+		  const negative = status === 'differs-from-baseline' || status === 'missing'
+		  return h(Badge, {
+		    key: 'status',
+		    label: t(key),
+		    className: positive ? 'dsm-pillOwn' : negative ? 'dsm-pillMissing' : undefined,
+		  })
+		}
+
+		function ResourcesModal({ detail, actions, t }) {
+		  const data = detail.data
+		  const resources = data?.resources ?? []
+		  const groups = new Map()
+		  for (const row of resources) {
+		    const type = RES_GROUP_ORDER.includes(row.resourceType) ? row.resourceType : 'file'
+		    if (groups.has(type) === false) groups.set(type, [])
+		    groups.get(type).push(row)
+		  }
+		  const cleanupState = detail.status?.cleanup?.state ?? (data?.tracked === false ? 'legacy' : 'none')
+		  const conflicts = Array.isArray(detail.status?.cleanup?.conflicts) ? detail.status.cleanup.conflicts : []
+		  const baseline = data?.baseline ?? null
+
+		  return h(Modal, {
+		    open: true,
+		    onClose: actions.closeDetail,
+		    title: t('res.title'),
+		    closeLabel: t('action.closeModal'),
+		    footer: [h(Button, { key: 'close', variant: 'primary', size: 'sm', onClick: actions.closeDetail }, t('action.closeModal'))],
+		  },
+		    h('div', { className: 'dsm-resBody' },
+		      detail.loading === true && h('p', { className: 'dsm-resHint' }, t('res.loading')),
+		      detail.error !== null && h('p', { className: 'dsm-resHint dsm-resHintError' }, t('error.request', { reason: detail.error })),
+		      detail.loading === false && detail.error === null && data !== null && [
+		        h('div', { key: 'meta', className: 'dsm-resMetaLine' },
+		          h('span', { key: 'cleanup' }, `${t('res.cleanup')}: ${t(RES_CLEANUP_KEY[cleanupState] ?? 'res.cleanup.none')}`),
+		          baseline !== null && h('span', { key: 'files' }, t('res.baselineFiles', { n: baseline.fileCount })),
+		          baseline?.cwd !== undefined && h('span', { key: 'cwd', className: 'dsm-resCwd' }, baseline.cwd),
+		          baseline?.truncated === true && h('span', { key: 'trunc' }, t('res.truncated')),
+		        ),
+		        conflicts.length > 0 && h('div', { key: 'conflicts', className: 'dsm-resConflicts' },
+		          t('res.conflicts', { n: conflicts.length })),
+		        data.tracked === false && h('p', { key: 'legacy', className: 'dsm-resHint' }, t('res.legacy')),
+		        data.tracked === true && resources.length === 0 && h('p', { key: 'empty', className: 'dsm-resHint' }, t('res.empty')),
+		        RES_GROUP_ORDER.map(type => {
+		          const rows = groups.get(type)
+		          if (rows === undefined || rows.length === 0) return null
+		          return h('div', { key: type, className: 'dsm-resGroup' },
+		            h('div', { className: 'dsm-resGroupTitle' }, `${t(RES_GROUP_KEY[type])} · ${rows.length}`),
+		            h('div', { className: 'dsm-resGroupList' },
+		              rows.map(row => h('div', { key: `${row.resourceType}:${row.identifier}`, className: 'dsm-resRow' },
+		                h('div', { className: 'dsm-resMain' },
+		                  h('div', { className: 'dsm-resId' }, row.identifier),
+		                  h('div', { className: 'dsm-resExtra' }, [
+		                    row.actions !== undefined && row.actions.length > 0 ? `${t('res.lastAction')}: ${row.actions.join(', ')}` : null,
+		                    typeof row.url === 'string' ? row.url : null,
+		                    row.before !== undefined && row.before !== null ? `v${row.before} → ${row.after ?? '—'}` : null,
+		                  ].filter(Boolean).join(' · ')),
+		                ),
+		                h('div', { className: 'dsm-resPills' },
+		                  ownershipPill(row.ownership, t),
+		                  statusPill(row.status, t),
+		                ),
+		              )),
+		            ),
+		          )
+		        }),
+		      ],
+		    ),
+		  )
+		}
+
 		function SessionManagerPage(props) {
 		  const { useStore, actions, t, controller } = props
 		  const view = useStore(s => s.view)
@@ -590,6 +838,7 @@ window.__ModuleLoader__.load({
 		  const selectMode = useStore(s => s.selectMode)
 		  const selectedIds = useStore(s => s.selectedIds)
 		  const confirmPurgeIds = useStore(s => s.confirmPurgeIds)
+		  const detail = useStore(s => s.detail)
 		  const config = useStore(s => s.config)
 		  const sources = useStore(s => s.sources)
 		  const noticeDismissed = useStore(s => s.noticeDismissed)
@@ -657,6 +906,7 @@ window.__ModuleLoader__.load({
 		              }))),
 		    selectMode && h(BatchBar, { view, rows, selectedIds, actions, controller, t, config }),
 		    confirmPurgeIds !== null && h(PurgeConfirmModal, { ids: confirmPurgeIds, rows, actions, controller, t }),
+		    detail !== null && h(ResourcesModal, { detail, actions, controller, t }),
 		  )
 		}
 

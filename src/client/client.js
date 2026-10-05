@@ -39,6 +39,8 @@ function createApi(ctx) {
     restore: ids => call('restore', { ids }),
     purge: ids => call('purge', { ids }),
     getConfig: () => call('config', {}),
+    resources: id => call('resources', { id }),
+    cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
   }
 }
 
@@ -139,6 +141,24 @@ function createManagerStore() {
       },
       openConfirmPurge: (draft, ids) => { draft.confirmPurgeIds = ids },
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
+      // resource detail modal (0.2.x): one open detail at a time
+      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null } },
+      setDetailData: (draft, data) => {
+        if (draft.detail !== null && draft.detail.id === data?.sessionId) {
+          draft.detail.loading = false
+          draft.detail.data = data
+        }
+      },
+      setDetailStatus: (draft, status) => {
+        if (draft.detail !== null) draft.detail.status = status
+      },
+      setDetailError: (draft, message) => {
+        if (draft.detail !== null) {
+          draft.detail.loading = false
+          draft.detail.error = message
+        }
+      },
+      closeDetail: (draft) => { draft.detail = null },
     },
   })
 }
@@ -149,6 +169,7 @@ function createManagerStore() {
 
 function createController({ ctx, api, instance }) {
   let loadSeq = 0
+  let detailSeq = 0
   let refreshTimer
   let eventDisposers = []
 
@@ -221,6 +242,25 @@ function createController({ ctx, api, instance }) {
     return true
   }
 
+  /** Load one session's resource view + cleanup status into the detail modal. */
+  async function openResources(id) {
+    const seq = ++detailSeq
+    instance.actions.openDetail(id)
+    const [resources, status] = await Promise.all([
+      api.resources(id),
+      api.cleanupStatus(id).catch(() => null),
+    ])
+    if (seq !== detailSeq) return
+    if (resources?.ok === true) {
+      instance.actions.setDetailData(resources.value)
+    } else {
+      console.warn('[dsh-session-manager] resources failed:', describeError(resources?.error))
+      instance.actions.setDetailError(formatError(resources?.error))
+      return
+    }
+    if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
+  }
+
   function dispose() {
     if (refreshTimer !== undefined) clearTimeout(refreshTimer)
     for (const disposer of eventDisposers.splice(0)) {
@@ -228,7 +268,7 @@ function createController({ ctx, api, instance }) {
     }
   }
 
-  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, dispose }
+  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, dispose }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,9 +378,11 @@ function Row({ row, view, t, selectMode, selected, actions, controller, config }
 
   const quickActions = []
   if (row.deleted === true) {
+    quickActions.push(h(Button, { key: 'resources', variant: 'ghost', size: 'sm', onClick: () => void controller.openResources(row.id) }, t('action.resources')))
     quickActions.push(h(Button, { key: 'restore', variant: 'ghost', size: 'sm', icon: h(IconUnarchiveOutlineRegular, { size: 14 }), onClick: () => void controller.runOp('restore', [row.id], t) }, t('action.restore')))
     quickActions.push(h(Button, { key: 'purge', variant: 'ghost', size: 'sm', className: 'dsm-dangerButton', icon: h(IconTrashOutlineRegular, { size: 14 }), 'aria-label': t('action.purge'), onClick: () => purgeOne(row.id) }))
   } else {
+    quickActions.push(h(Button, { key: 'resources', variant: 'ghost', size: 'sm', onClick: () => void controller.openResources(row.id) }, t('action.resources')))
     if (row.archived === true) {
       quickActions.push(h(Button, { key: 'unarchive', variant: 'ghost', size: 'sm', icon: h(IconUnarchiveOutlineRegular, { size: 14 }), onClick: () => void controller.runOp('unarchive', [row.id], t) }, t('action.unarchive')))
     } else {
@@ -436,6 +478,132 @@ function PurgeConfirmModal({ ids, rows, actions, controller, t }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Resource detail modal — "what did this session produce?"
+// Backed by the `resources` + `cleanupStatus` RPCs; groups the session's
+// baseline and journal-derived resources by type with ownership/status pills.
+// ---------------------------------------------------------------------------
+
+const RES_GROUP_ORDER = ['file', 'configuration', 'download', 'directory', 'dependency', 'environment_variable', 'process']
+const RES_GROUP_KEY = {
+  file: 'res.group.file',
+  configuration: 'res.group.configuration',
+  download: 'res.group.download',
+  directory: 'res.group.directory',
+  dependency: 'res.group.dependency',
+  environment_variable: 'res.group.env',
+  process: 'res.group.process',
+}
+const RES_OWNERSHIP_KEY = {
+  session_created: 'res.own.created',
+  session_modified: 'res.own.modified',
+  session_deleted: 'res.own.deleted',
+  session_installed: 'res.own.installed',
+  session_configured: 'res.own.configured',
+  preexisting: 'res.own.preexisting',
+}
+const RES_STATUS_KEY = {
+  'matches-baseline': 'res.status.matches',
+  'differs-from-baseline': 'res.status.differs',
+  present: 'res.status.present',
+  missing: 'res.status.missing',
+  'see-actions': 'res.status.actions',
+  informational: 'res.status.info',
+  unknown: 'res.status.unknown',
+  unreadable: 'res.status.unreadable',
+}
+const RES_CLEANUP_KEY = {
+  active: 'res.cleanup.active',
+  delete_requested: 'res.cleanup.requested',
+  rolling_back: 'res.cleanup.running',
+  rollback_failed: 'res.cleanup.failed',
+  rollback_verified: 'res.cleanup.verified',
+  session_deleted: 'res.cleanup.sessionDeleted',
+  complete: 'res.cleanup.complete',
+  none: 'res.cleanup.none',
+  legacy: 'res.cleanup.legacy',
+}
+
+function ownershipPill(ownership, t) {
+  const key = RES_OWNERSHIP_KEY[ownership]
+  if (key === undefined) return null
+  return h(Badge, { key: 'own', label: t(key), className: ownership === 'preexisting' ? undefined : 'dsm-pillOwn' })
+}
+
+function statusPill(status, t) {
+  const key = RES_STATUS_KEY[status]
+  if (key === undefined) return null
+  const positive = status === 'matches-baseline' || status === 'present'
+  const negative = status === 'differs-from-baseline' || status === 'missing'
+  return h(Badge, {
+    key: 'status',
+    label: t(key),
+    className: positive ? 'dsm-pillOwn' : negative ? 'dsm-pillMissing' : undefined,
+  })
+}
+
+function ResourcesModal({ detail, actions, t }) {
+  const data = detail.data
+  const resources = data?.resources ?? []
+  const groups = new Map()
+  for (const row of resources) {
+    const type = RES_GROUP_ORDER.includes(row.resourceType) ? row.resourceType : 'file'
+    if (groups.has(type) === false) groups.set(type, [])
+    groups.get(type).push(row)
+  }
+  const cleanupState = detail.status?.cleanup?.state ?? (data?.tracked === false ? 'legacy' : 'none')
+  const conflicts = Array.isArray(detail.status?.cleanup?.conflicts) ? detail.status.cleanup.conflicts : []
+  const baseline = data?.baseline ?? null
+
+  return h(Modal, {
+    open: true,
+    onClose: actions.closeDetail,
+    title: t('res.title'),
+    closeLabel: t('action.closeModal'),
+    footer: [h(Button, { key: 'close', variant: 'primary', size: 'sm', onClick: actions.closeDetail }, t('action.closeModal'))],
+  },
+    h('div', { className: 'dsm-resBody' },
+      detail.loading === true && h('p', { className: 'dsm-resHint' }, t('res.loading')),
+      detail.error !== null && h('p', { className: 'dsm-resHint dsm-resHintError' }, t('error.request', { reason: detail.error })),
+      detail.loading === false && detail.error === null && data !== null && [
+        h('div', { key: 'meta', className: 'dsm-resMetaLine' },
+          h('span', { key: 'cleanup' }, `${t('res.cleanup')}: ${t(RES_CLEANUP_KEY[cleanupState] ?? 'res.cleanup.none')}`),
+          baseline !== null && h('span', { key: 'files' }, t('res.baselineFiles', { n: baseline.fileCount })),
+          baseline?.cwd !== undefined && h('span', { key: 'cwd', className: 'dsm-resCwd' }, baseline.cwd),
+          baseline?.truncated === true && h('span', { key: 'trunc' }, t('res.truncated')),
+        ),
+        conflicts.length > 0 && h('div', { key: 'conflicts', className: 'dsm-resConflicts' },
+          t('res.conflicts', { n: conflicts.length })),
+        data.tracked === false && h('p', { key: 'legacy', className: 'dsm-resHint' }, t('res.legacy')),
+        data.tracked === true && resources.length === 0 && h('p', { key: 'empty', className: 'dsm-resHint' }, t('res.empty')),
+        RES_GROUP_ORDER.map(type => {
+          const rows = groups.get(type)
+          if (rows === undefined || rows.length === 0) return null
+          return h('div', { key: type, className: 'dsm-resGroup' },
+            h('div', { className: 'dsm-resGroupTitle' }, `${t(RES_GROUP_KEY[type])} · ${rows.length}`),
+            h('div', { className: 'dsm-resGroupList' },
+              rows.map(row => h('div', { key: `${row.resourceType}:${row.identifier}`, className: 'dsm-resRow' },
+                h('div', { className: 'dsm-resMain' },
+                  h('div', { className: 'dsm-resId' }, row.identifier),
+                  h('div', { className: 'dsm-resExtra' }, [
+                    row.actions !== undefined && row.actions.length > 0 ? `${t('res.lastAction')}: ${row.actions.join(', ')}` : null,
+                    typeof row.url === 'string' ? row.url : null,
+                    row.before !== undefined && row.before !== null ? `v${row.before} → ${row.after ?? '—'}` : null,
+                  ].filter(Boolean).join(' · ')),
+                ),
+                h('div', { className: 'dsm-resPills' },
+                  ownershipPill(row.ownership, t),
+                  statusPill(row.status, t),
+                ),
+              )),
+            ),
+          )
+        }),
+      ],
+    ),
+  )
+}
+
 function SessionManagerPage(props) {
   const { useStore, actions, t, controller } = props
   const view = useStore(s => s.view)
@@ -447,6 +615,7 @@ function SessionManagerPage(props) {
   const selectMode = useStore(s => s.selectMode)
   const selectedIds = useStore(s => s.selectedIds)
   const confirmPurgeIds = useStore(s => s.confirmPurgeIds)
+  const detail = useStore(s => s.detail)
   const config = useStore(s => s.config)
   const sources = useStore(s => s.sources)
   const noticeDismissed = useStore(s => s.noticeDismissed)
@@ -514,6 +683,7 @@ function SessionManagerPage(props) {
               }))),
     selectMode && h(BatchBar, { view, rows, selectedIds, actions, controller, t, config }),
     confirmPurgeIds !== null && h(PurgeConfirmModal, { ids: confirmPurgeIds, rows, actions, controller, t }),
+    detail !== null && h(ResourcesModal, { detail, actions, controller, t }),
   )
 }
 

@@ -23,7 +23,7 @@
 //     (requirement §十五).
 
 import { join, resolve } from 'node:path'
-import { readdir, rm, stat, readFile } from 'node:fs/promises'
+import { readdir, rm, stat, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { encodeSegment } from '../session-manage.js'
 import {
   ACTIONS, OWNERSHIP, RESOURCE_TYPES, CLEANUP_STATES, RESUMABLE_STATES,
@@ -41,6 +41,7 @@ import {
 import { parseEnvCommand } from './trackers/env.js'
 
 const DIFF_DEBOUNCE_MS = 800
+const ACTIVITY_FLUSH_MS = 1500
 const PATH_RESOURCE_TYPES = new Set(['file', 'configuration', 'directory', 'download'])
 
 /**
@@ -95,15 +96,19 @@ function clampNumber(value, min, max, fallback) {
  * @param {object} opts
  * @param {string} opts.dshHome resolved $DSH_HOME
  * @param {object} opts.ctx cordis context (lazy service probes)
+ * @param {object} [opts.manifest] trash manifest store (session-manage.js) —
+ *   purge tombstones keep the baseline sweep from resurrecting dead sessions
+ *   whose host-side corpus cache is stale
  * @param {() => object} opts.getConfig resolved config snapshot (volatile-aware)
  * @param {object} [opts.logger]
  */
-export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }) {
+export function createSessionResourceManager({ dshHome, ctx, manifest, getConfig, logger }) {
   const trackingRoot = join(dshHome, 'dsh-session-manager', 'tracking')
   const runtimes = new Map() // sessionId → runtime
   const baselineJobs = new Map() // sessionId → in-flight capture promise
   const diffTimers = new Map() // sessionId → timer
-  const lastSeenAt = new Map() // sessionId → last session-event timestamp
+  const lastSeenAt = new Map() // sessionId → last session-event timestamp (in-memory)
+  const activityTimers = new Map() // sessionId → debounced activity.json writer
   let bootstrapStarted = false
 
   function enabled() {
@@ -152,8 +157,49 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
       depAdapters: [nodeModulesAdapter],
       env: process.env,
       conflictMode: conflictMode(),
+      // 最终 diff 记录的可疑阈值（复用 trackingIdleWindowMs 配置）：会话安静
+      // 超过此时长后，删除时 final diff 捕获的变更按外部修改保护，不自动回滚
+      finalDiffSuspectMs: clampNumber(getConfig().trackingIdleWindowMs, 0, 7 * 24 * 3600 * 1000, 5 * 60 * 1000),
       logger,
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // Session activity clock — persisted so ownership judgements survive a
+  // plugin remount / host restart (the in-memory map alone would make every
+  // post-restart final-diff record look ancient and get skipped).
+  // -------------------------------------------------------------------------
+
+  const activityPathFor = sessionId => join(dirFor(sessionId), 'activity.json')
+
+  /** Record session activity: in-memory immediately, disk debounced. */
+  function noteActivity(sessionId) {
+    const now = Date.now()
+    lastSeenAt.set(sessionId, now)
+    if (activityTimers.has(sessionId)) return
+    const timer = setTimeout(() => {
+      activityTimers.delete(sessionId)
+      void (async () => {
+        await mkdir(dirFor(sessionId), { recursive: true })
+        await writeFile(activityPathFor(sessionId), `${JSON.stringify({ lastEventAt: lastSeenAt.get(sessionId) ?? now })}\n`, 'utf8')
+      })().catch(error => {
+        logger?.warn?.(`[dsh-session-manager] activity persist for ${sessionId} failed: ${error?.message ?? error}`)
+      })
+    }, ACTIVITY_FLUSH_MS)
+    if (typeof timer.unref === 'function') timer.unref()
+    activityTimers.set(sessionId, timer)
+  }
+
+  /** Last observed session activity: max(in-memory, persisted). */
+  async function lastSeenOf(sessionId) {
+    const memory = lastSeenAt.get(sessionId) ?? 0
+    try {
+      const raw = JSON.parse(await readFile(activityPathFor(sessionId), 'utf8'))
+      const persisted = Number(raw?.lastEventAt)
+      return Math.max(memory, Number.isFinite(persisted) ? persisted : 0)
+    } catch {
+      return memory
+    }
   }
 
   /** Resolve the session cwd from the host corpus (best effort). */
@@ -188,6 +234,13 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
     const stores = storesFor(sessionId)
     const existing = await stores.baselineStore.load()
     if (existing !== null) return existing
+    // A session with a pending cleanup is being torn down — baselining it now
+    // would race the resume (and can resurrect a tracking dir the rollback
+    // just finished destroying). Purged tombstones protect against a stale
+    // corpus listing a session whose data is already gone.
+    if (manifest !== undefined && await manifest.isPurged?.(sessionId) === true) return null
+    const pendingState = await stores.stateStore.load()
+    if (pendingState !== null && RESUMABLE_STATES.has(pendingState.state)) return null
     let job = baselineJobs.get(sessionId)
     if (job !== undefined) return job
     job = (async () => {
@@ -269,8 +322,8 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
     return runtime
   }
 
-  /** Stamp ownership, then append one change to the journal. */
-  async function record(runtime, change) {
+  /** Stamp ownership (and any caller metadata), then append to the journal. */
+  async function record(runtime, change, extraMetadata = {}) {
     if (change === null || change === undefined) return null
     const inBaseline = baselineMembership(change, runtime.baseline)
     const stamped = makeChangeRecord({
@@ -282,7 +335,7 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
       before: change.before ?? null,
       after: change.after ?? null,
       ownership: deriveOwnership(change, { inBaseline }),
-      metadata: change.metadata,
+      metadata: { ...(change.metadata ?? {}), ...extraMetadata },
     })
     return runtime.stores.journal.append(stamped)
   }
@@ -300,7 +353,7 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
     if (typeof sessionId !== 'string' || sessionId === '' || event === null || typeof event !== 'object') return
     try {
       if (enabled() === false) return
-      lastSeenAt.set(sessionId, Date.now())
+      noteActivity(sessionId)
       await ensureBaseline(sessionId)
       const runtime = await runtimeFor(sessionId)
       if (runtime === null) return
@@ -315,6 +368,60 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
     } catch (error) {
       logger?.warn?.(`[dsh-session-manager] observe ${sessionId} failed: ${error?.message ?? error}`)
     }
+  }
+
+  /**
+   * A session came into existence: baseline it RIGHT NOW, while its workspace
+   * is still pristine — the earliest and most faithful attribution anchor we
+   * can get (wired to the host `session/created` event).
+   */
+  async function observeSessionCreated(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId === '' ) return
+    try {
+      if (enabled() === false) return
+      noteActivity(sessionId)
+      await ensureBaseline(sessionId)
+    } catch (error) {
+      logger?.warn?.(`[dsh-session-manager] baseline on create for ${sessionId} failed: ${error?.message ?? error}`)
+    }
+  }
+
+  /**
+   * Baseline every session the host corpus knows about, staggered to keep the
+   * disk load flat. Closes the "session existed before the plugin loaded /
+   * plugin remounted" gap: after a boot sweep, every known session has a
+   * baseline, so later work is attributable instead of being grandfathered as
+   * pre-existing forever.
+   */
+  async function baselineKnownSessions() {
+    if (enabled() === false) return 0
+    const ids = new Set()
+    try {
+      const query = ctx.get?.('sessionQuery')
+      if (query !== undefined && typeof query.listSessions === 'function') {
+        for (const record of (await query.listSessions()) ?? []) {
+          const id = String(record?.header?.id ?? '')
+          if (id !== '') ids.add(id)
+        }
+      }
+    } catch { /* corpus unavailable; the event/list paths still self-heal */ }
+    try {
+      const persistence = ctx.get?.('sessionPersistence')
+      if (persistence !== undefined && typeof persistence.list === 'function') {
+        for (const snapshot of (await persistence.list()) ?? []) {
+          const id = String(snapshot?.header?.id ?? '')
+          if (id !== '') ids.add(id)
+        }
+      }
+    } catch { /* same */ }
+    let started = 0
+    for (const id of ids) {
+      started += 1
+      void ensureBaseline(id).catch(() => {})
+      // stagger so a large corpus does not stampede the disk at boot
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 100))
+    }
+    return started
   }
 
   async function observeToolCall(runtime, event) {
@@ -366,9 +473,11 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
   /**
    * One full tracking pass: file diff, download correlation, dependency
    * diff — everything goes through `record()` so ownership and journaling
-   * stay uniform. Returns the number of changes journaled.
+   * stay uniform. `recordMetadata` (used by the removal-time final diff)
+   * is stamped onto every record this pass produces. Returns the number of
+   * changes journaled.
    */
-  async function diffSession(sessionId) {
+  async function diffSession(sessionId, { recordMetadata } = {}) {
     if (enabled() === false) return { journaled: 0, tracked: false }
     await ensureBaseline(sessionId)
     const runtime = await runtimeFor(sessionId)
@@ -393,16 +502,16 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
           resourceType: RESOURCE_TYPES.DOWNLOAD,
           action: ACTIONS.DOWNLOADED,
           metadata: { url },
-        })
+        }, recordMetadata)
       } else {
-        await record(runtime, change)
+        await record(runtime, change, recordMetadata)
       }
       journaled += 1
     }
 
     const depChanges = await runtime.trackers.dependency.diff()
     for (const change of depChanges) {
-      await record(runtime, change)
+      await record(runtime, change, recordMetadata)
       journaled += 1
     }
     return { journaled, tracked: true }
@@ -423,12 +532,13 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
    * rollback with conflict detection. Untracked/legacy sessions short-circuit
    * to a no-op so the existing removal flow is untouched.
    *
-   * The final diff runs only while the session still looks ALIVE (a session
-   * event inside the idle window): once a session has gone quiet, workspace
-   * changes are as likely to be somebody else's — diffing them into the
-   * journal would re-brand external edits as session-owned and defeat the
-   * conflict check that protects them (requirement §六/§九). Idle sessions
-   * roll back against the journal as it stands.
+   * The final diff ALWAYS runs — a tracked session must be cleaned even when
+   * its event-driven diffs were missed (plugin remount, restart). The risk of
+   * re-attributing external edits is handled by marking every final-diff
+   * record with the session's idle time and letting the cleanup engine SKIP
+   * records whose idle time exceeds `trackingIdleWindowMs`: a change captured
+   * long after the session went quiet is far more likely somebody else's, so
+   * it is preserved and reported instead of rolled back.
    */
   async function prepareRemoval(sessionId, { mode = 'full' } = {}) {
     if (enabled() === false || getConfig().autoCleanup === false) {
@@ -437,21 +547,19 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
     if ((await hasAnyTracking(sessionId)) === false) {
       return { ok: true, skipped: 'legacy-untracked', state: null, actions: [], conflicts: [], failures: [] }
     }
-    let finalDiff = 'skipped-idle'
-    const idleWindowMs = clampNumber(getConfig().trackingIdleWindowMs, 0, 7 * 24 * 3600 * 1000, 5 * 60 * 1000)
-    const lastSeen = lastSeenAt.get(sessionId) ?? 0
-    if (idleWindowMs > 0 && Date.now() - lastSeen <= idleWindowMs) {
-      finalDiff = 'ran'
-      try {
-        await diffSession(sessionId) // final diff — requirement §六/§七
-      } catch (error) {
-        logger?.warn?.(`[dsh-session-manager] final diff ${sessionId} failed: ${error?.message ?? error}`)
-      }
+    let finalDiff = 'ran'
+    let idleMs = null
+    try {
+      idleMs = Date.now() - (await lastSeenOf(sessionId))
+      await diffSession(sessionId, { recordMetadata: { finalDiff: true, idleMs } })
+    } catch (error) {
+      finalDiff = 'failed'
+      logger?.warn?.(`[dsh-session-manager] final diff ${sessionId} failed: ${error?.message ?? error}`)
     }
     const engine = createEngine(sessionId, storesFor(sessionId))
     await engine.requestCleanup(mode)
     const outcome = await engine.rollback()
-    return { ok: outcome.ok, state: outcome.state, actions: outcome.actions, conflicts: outcome.conflicts, failures: outcome.failures, finalDiff }
+    return { ok: outcome.ok, state: outcome.state, actions: outcome.actions, conflicts: outcome.conflicts, failures: outcome.failures, finalDiff, idleMs }
   }
 
   /** Written BEFORE the session dir is unlinked (crash-resumable marker). */
@@ -573,6 +681,12 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
       logger?.warn?.(`[dsh-session-manager] resume rm ${located.directory} failed: ${error?.message ?? error}`)
       return false
     }
+    // same tombstone the purge flow writes: a resumed cleanup IS a purge, and
+    // the tombstone keeps the boot sweep (and any stale corpus) from treating
+    // the session as live and re-baselining it
+    try {
+      await manifest?.markPurged?.(sessionId)
+    } catch { /* tombstone is best-effort */ }
     try {
       await manage.invalidateRemovedSession(ctx, sessionId, logger)
     } catch { /* best effort cache invalidation */ }
@@ -838,23 +952,34 @@ export function createSessionResourceManager({ dshHome, ctx, getConfig, logger }
   function dispose() {
     for (const timer of diffTimers.values()) clearTimeout(timer)
     diffTimers.clear()
+    for (const timer of activityTimers.values()) clearTimeout(timer)
+    activityTimers.clear()
   }
 
-  /** Startup: resume unfinished cleanups exactly once. */
+  /** Startup: resume unfinished cleanups, then baseline every known session. */
   async function bootstrap() {
-    if (bootstrapStarted) return []
+    if (bootstrapStarted) return { resumed: [], baselined: 0 }
     bootstrapStarted = true
     try {
-      return await resumePending()
+      const resumed = await resumePending()
+      let baselined = 0
+      try {
+        baselined = await baselineKnownSessions()
+      } catch (error) {
+        logger?.warn?.(`[dsh-session-manager] boot baseline sweep failed: ${error?.message ?? error}`)
+      }
+      return { resumed, baselined }
     } catch (error) {
       logger?.warn?.(`[dsh-session-manager] cleanup resume failed: ${error?.message ?? error}`)
-      return []
+      return { resumed: [], baselined: 0 }
     }
   }
 
   return {
     ensureBaseline,
     observeEvent,
+    observeSessionCreated,
+    baselineKnownSessions,
     diffSession,
     prepareRemoval,
     beforeSessionDirRemoval,

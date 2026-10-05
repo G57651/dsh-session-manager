@@ -147,6 +147,15 @@ export function createManifestStore(filePath, logger) {
       // ran through delete, so there is no prior record to flip (audit P3).
       return this.add({ id, deletedAt: Date.now(), purged: true })
     },
+    /**
+     * True when the session has a persisted purge tombstone. The lifecycle
+     * baseline sweep consults this so a stale host corpus (which still lists
+     * a session whose directory is gone) cannot resurrect its tracking dir.
+     */
+    async isPurged(id) {
+      await load()
+      return data.items.some(item => item.id === id && item.purged === true)
+    },
     async flush() {
       await load()
       await writeChain

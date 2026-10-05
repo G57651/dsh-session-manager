@@ -98,10 +98,25 @@ function defaultPidAlive(pid) {
  * @param {object[]} [opts.depAdapters] dependency manager adapters (id-probed)
  * @param {object} [opts.env] env for environment-variable restore
  * @param {'safe'|'force'} [opts.conflictMode]
+ * @param {number} [opts.finalDiffSuspectMs] removal-time final-diff records
+ *   whose session idle time exceeds this are treated as external edits:
+ *   preserved and reported, never rolled back (default 5 min)
  * @param {object} [opts.logger]
  */
-export function createCleanupEngine({ trackingDir, sessionId, stateStore, journal, baselineStore, snapshotStore, depAdapters = [], env = process.env, conflictMode = 'safe', logger }) {
+export function createCleanupEngine({ trackingDir, sessionId, stateStore, journal, baselineStore, snapshotStore, depAdapters = [], env = process.env, conflictMode = 'safe', finalDiffSuspectMs = 5 * 60 * 1000, logger }) {
   let inFlight = false
+
+  /**
+   * A final-diff record captured long after the session's last observed
+   * activity is far more likely somebody else's edit than the session's own
+   * work: preserve it (skip rollback) and report, never clobber.
+   */
+  function isSuspectFinalDiff(record) {
+    if (record?.metadata?.finalDiff !== true) return false
+    if (finalDiffSuspectMs <= 0) return false
+    const idleMs = Number(record.metadata?.idleMs)
+    return Number.isFinite(idleMs) && idleMs > finalDiffSuspectMs
+  }
 
   return {
     get isBusy() {
@@ -303,6 +318,20 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
         failures.push({ phase: 'dependency', package: pkg, manager, reason: 'adapter-missing' })
         continue
       }
+      if (isSuspectFinalDiff(last.record) === true) {
+        if (conflictMode === 'force') {
+          conflicts.push({
+            phase: 'dependency', package: pkg, manager,
+            expected: 'external-or-session-install', current: 'external-or-session-install',
+            reason: 'external-suspect: detected long after the session went quiet',
+            idleMs: last.record.metadata?.idleMs, executed: true,
+          })
+          // fall through: force uninstalls anyway
+        } else {
+          actions.push({ phase: 'dependency', package: pkg, manager, outcome: 'skipped', reason: 'external-suspect', idleMs: last.record.metadata?.idleMs })
+          continue
+        }
+      }
       const installedNow = await adapter.list(cwd).then(map => map.has(pkg)).catch(() => false)
       // desired end state: the package only existed because of the session →
       // gone. Pre-existing → must still be there (upgrade rollbacks are
@@ -425,6 +454,23 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
       // leaves the path empty; everything else leaves the record's after-state
       const expectedAfter = (last.side === 'from' || last.record.action === 'deleted') ? null : last.record.after
       const desired = entry.inBaseline ? 'restore' : 'remove'
+
+      if (isSuspectFinalDiff(last.record) === true) {
+        if (conflictMode === 'force') {
+          // explicit user decision: execute the rollback anyway, conflict on record
+          conflicts.push({
+            phase: 'path', path,
+            expected: 'external-or-session-change', current: 'external-or-session-change',
+            reason: 'external-suspect: captured long after the session went quiet',
+            idleMs: last.record.metadata?.idleMs, executed: true,
+          })
+          // fall through to the normal restore/remove machinery
+        } else {
+          // safe mode: a deliberate preserve, not a failure — report and move on
+          actions.push({ phase: 'path', path, outcome: 'skipped', reason: 'external-suspect', idleMs: last.record.metadata?.idleMs })
+          continue
+        }
+      }
       const current = await currentEntry(cwd, path)
       if (current.unsafe === true) {
         failures.push({ phase: 'path', path, reason: 'unsafe-path' })
@@ -618,6 +664,11 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
   async function runVerifyPhase(cwd, records, baseline, actions, conflicts, failures) {
     const ledger = buildPathLedger(records, baseline)
     for (const [path, entry] of ledger) {
+      const last = entry.touches[entry.touches.length - 1]
+      if (isSuspectFinalDiff(last.record)) {
+        actions.push({ phase: 'verify', path, outcome: 'skipped', reason: 'external-suspect' })
+        continue
+      }
       if (entry.inBaseline === true) {
         if (entry.baselineEntry?.sha256 === null || entry.baselineEntry?.sha256 === undefined) continue
         const currentHash = await hashOf(cwd, path)
