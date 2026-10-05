@@ -346,15 +346,27 @@
 
 .dsm-resContent {
   min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* the Modal's own .body wrapper sits between .content and our scroller;
+   without min-height:0 the flex chain cannot shrink and the list clips
+   instead of scrolling (the "cannot scroll with many files" bug) */
+.dsm-resContent > div:last-child {
+  min-height: 0;
+  max-height: 100%;
 }
 
 .dsm-resBody {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1 1 auto;
   min-height: 0;
   max-height: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .dsm-resMetaLine {

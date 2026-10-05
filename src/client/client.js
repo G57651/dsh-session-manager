@@ -146,9 +146,12 @@ function createManagerStore() {
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
       // resource detail modal (0.2.x): one open detail at a time; the modal
       // owns its app-picker selection, scanned app list and batch selection
-      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, apps: [], app: '', selected: [], busy: false } },
-      setDetailApps: (draft, apps) => {
-        if (draft.detail !== null) draft.detail.apps = apps
+      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, apps: [], platform: '', app: '', selected: [], busy: false } },
+      setDetailApps: (draft, apps, platform) => {
+        if (draft.detail !== null) {
+          draft.detail.apps = apps
+          draft.detail.platform = typeof platform === 'string' ? platform : draft.detail.platform
+        }
       },
       setDetailApp: (draft, app) => {
         if (draft.detail !== null) draft.detail.app = app
@@ -283,7 +286,7 @@ function createController({ ctx, api, instance }) {
     }
     if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
     if (applications?.ok === true && Array.isArray(applications.value?.applications)) {
-      instance.actions.setDetailApps(applications.value.applications)
+      instance.actions.setDetailApps(applications.value.applications, applications.value.platform)
     }
   }
 
@@ -345,6 +348,12 @@ function rowKeyOf(row) {
 
 /** Path-shaped resources can be opened/revealed; env vars and processes cannot. */
 const OPENABLE_TYPES = new Set(['file', 'configuration', 'download', 'directory', 'dependency'])
+
+/** The default "open" target is the OS file manager of THIS computer. */
+function fileManagerName(platform, t) {
+  const key = platform === 'darwin' ? 'res.fm.darwin' : platform === 'win32' ? 'res.fm.win32' : 'res.fm.linux'
+  return t(key)
+}
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -665,11 +674,24 @@ function ResourcesModal({ detail, actions, controller, t }) {
             onChange: event => actions.setDetailApp(event.target.value),
             'aria-label': t('res.appLabel'),
           },
-            h('option', { key: 'default', value: '' }, t('res.appDefault')),
-            detail.apps.length === 0 && h('option', { key: 'scanning', value: '', disabled: true }, t('res.appNone')),
+            h('option', { key: 'default', value: '' }, t('res.appDefault', { name: fileManagerName(detail.platform, t) })),
             detail.apps.map(name => h('option', { key: name, value: name }, name)),
           ),
           h(Button, { key: 'ws', variant: 'ghost', size: 'sm', disabled: detail.busy === true, onClick: () => void controller.openWorkspace() }, t('res.openWorkspace')),
+          h(Button, {
+            key: 'selectAll',
+            variant: 'ghost',
+            size: 'sm',
+            disabled: openableRows.length === 0,
+            onClick: () => actions.setDetailSelected(openableRows.map(row => rowKeyOf(row))),
+          }, t('res.selectAll')),
+          h(Button, {
+            key: 'invert',
+            variant: 'ghost',
+            size: 'sm',
+            disabled: openableRows.length === 0,
+            onClick: () => actions.setDetailSelected(openableRows.map(row => rowKeyOf(row)).filter(key => detail.selected.includes(key) === false)),
+          }, t('res.invert')),
           h(Button, {
             key: 'batch',
             variant: 'ghost',
