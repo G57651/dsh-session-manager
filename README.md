@@ -240,6 +240,12 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 
 ## 变更记录
 
+### 0.2.2（修复面板黑屏）
+
+- **修复点击「会话管理」面板整页黑屏**：0.2.1 新增资源视图时，store 的 `init()` 漏声明 `detail` 字段——`useStore(s => s.detail)` 返回 `undefined`，`detail !== null` 判定为真导致资源弹窗以 `undefined` 挂载，渲染抛错使 React 整树卸载（表现为面板黑屏，侧边栏入口仍在）。补上 `detail: null` 即恢复。
+- **构建期防回归**：`build-client.mjs` 现在校验每一条 `useStore(s => s.X)` 选择器都必须在 store `init()` 中声明，缺失即构建失败；新增 `scripts` 外的渲染冒烟（真实 react + 真实 client-store 驱动面板全部状态：加载 / 行列表 / 资源弹窗七类资源 / legacy / 冲突 / 批量栏 / purge 确认框）。
+- host 半无变化；从 0.2.1 直接升级。
+
 ### 0.2.1（跟踪自愈 + 资源视图面板）
 
 - **修复真机场景下删除不清理的核心缺口**：0.2.0 的事件驱动跟踪依赖 `tool/result` 触发的防抖 diff，插件重挂载 / 宿主重启后防抖丢失、或会话从未被观测时，删除会被判为 `legacy-untracked` 而跳过清理。0.2.1 三路闭合：

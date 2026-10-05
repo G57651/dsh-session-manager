@@ -140,6 +140,18 @@ ${indent(client.body)}
 
 // --- verification passes ---------------------------------------------------
 
+// Every `useStore(s => s.X)` selector must name a field the store's init()
+// actually declares — a selector on a missing field returns undefined and the
+// panel tree crashes (observed as a black panel in the real app, v0.2.1).
+{
+  const initMatch = /init: \(\) => \(\{([\s\S]*?)\}\),\n    actions:/.exec(client.body)
+  if (initMatch === null) fail('client.js: store init() literal not found')
+  const declared = new Set([...initMatch[1].matchAll(/^\s*([A-Za-z_$][\w$]*):/gm)].map(match => match[1]))
+  const selectors = [...client.body.matchAll(/useStore\(s => s\.([A-Za-z_$][\w$]*)\)/g)].map(match => match[1])
+  const missing = [...new Set(selectors)].filter(name => declared.has(name) === false)
+  if (missing.length > 0) fail(`client.js: useStore selectors missing from store init(): ${missing.join(', ')}`)
+}
+
 const externalsUsed = [...bundle.matchAll(/require\("([^"]+)"\)/g)].map(match => match[1])
 for (const specifier of new Set(externalsUsed)) {
   if (!externals.has(specifier)) {

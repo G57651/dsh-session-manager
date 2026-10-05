@@ -89,6 +89,7 @@ function createManagerStore() {
       sources: null,
       noticeDismissed: false,
       config: { confirmPurge: true, autoRefresh: true, maxBatchSize: 200, titleFetchLimit: 300 },
+      detail: null,
     }),
     actions: {
       setConfig: (draft, config) => { draft.config = config },
