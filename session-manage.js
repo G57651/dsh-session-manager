@@ -630,13 +630,13 @@ function summarizeCleanup(prepared) {
  * Best-effort by design — a tracking failure must never block the removal
  * itself; the summary lands in the RPC result either way.
  */
-async function runResourceCleanup(resourceManager, id) {
+async function runResourceCleanup(resourceManager, id, logger) {
   if (resourceManager === undefined) return undefined
   try {
     return await resourceManager.prepareRemoval(id, { mode: 'full' })
   } catch (error) {
     logger?.warn?.(`[dsh-session-manager] resource cleanup for ${id} failed: ${error?.message ?? error}`)
-    return { ok: false, state: null, actions: [], conflicts: [], failures: [{ phase: 'cleanup', reason: 'cleanup-crashed' }] }
+    return { ok: false, state: null, actions: [], conflicts: [], failures: [{ phase: 'cleanup', reason: 'cleanup-crashed', detail: error?.message ?? String(error) }] }
   }
 }
 
@@ -676,7 +676,7 @@ export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCac
     // Resource lifecycle: reverse what the session did to the world before
     // its own directory disappears (requirement §七). Runs after the activity
     // stop so the final diff races no writers.
-    const prepared = await runResourceCleanup(resourceManager, id)
+    const prepared = await runResourceCleanup(resourceManager, id, logger)
 
     const located = await locateSessionDir(sessionsRoot, id)
     if (!located.ok) {
@@ -732,7 +732,7 @@ async function removeSessionDir(ctx, id, { manifest, sessionsRoot, titleCache, l
   // Resource lifecycle first: the final diff and rollback must see the world
   // before the session directory (and with it the last session-owned state)
   // disappears (requirement §七).
-  const prepared = await runResourceCleanup(resourceManager, id)
+  const prepared = await runResourceCleanup(resourceManager, id, logger)
 
   const located = await locateSessionDir(sessionsRoot, id)
   if (!located.ok) {

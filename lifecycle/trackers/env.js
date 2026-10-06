@@ -30,6 +30,19 @@ export function envValueEntry(name, value) {
   return { redacted: false, value: String(value) }
 }
 
+/**
+ * Variables that steer the HARNESS PROCESS itself (spawn resolution, loader
+ * hooks, shell startup). Tracking them buys nothing — the child shell's value
+ * never reached the host — and any accidental write-back would be a real
+ * hazard, so they are excluded outright.
+ */
+const EXCLUDED_ENV_NAMES = new Set([
+  'PATH', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS',
+  'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_FRAMEWORK_PATH',
+  'HOME', 'TMPDIR', 'TMP', 'TEMP', 'SHELL', 'IFS', 'BASH_ENV', 'ENV',
+  'PROMPT_COMMAND', 'CDPATH', 'GLOBIGNORE', 'DSH_HOME',
+])
+
 const EXPORT_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*')|(?:"[^"]*")|[^\s#]*)/
 const EXPORT_BARE_RE = /^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s|$|=)/
 const UNSET_RE = /^\s*unset\s+(?:-v\s+)?([A-Za-z_][A-Za-z0-9_]*)/
@@ -95,6 +108,7 @@ export function createEnvTracker({ env = process.env, logger } = {}) {
      */
     classify(mutation) {
       const name = String(mutation.name)
+      if (EXCLUDED_ENV_NAMES.has(name) === true) return null
       const before = envValueEntry(name, env[name])
       if (mutation.kind === 'unset') {
         if (before === null) return null // nothing to unset
@@ -119,10 +133,5 @@ export function createEnvTracker({ env = process.env, logger } = {}) {
       }
     },
 
-    /** Apply one change to the live env (cleanup / record-time consistency). */
-    apply(name, value) {
-      if (value === null) delete env[name]
-      else env[name] = value
-    },
   }
 }

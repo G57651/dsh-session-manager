@@ -30,7 +30,7 @@ import { ACTIONS, RESOURCE_TYPES, isConfigurationName } from '../types.js'
  * @param {object} [opts.scan] scan bounds override ({maxFiles, maxDepth, excludes})
  * @param {object} [opts.logger]
  */
-export function createFileTracker({ cwd, state, baselineDirs = [], snapshotStore, scan = {}, logger }) {
+export function createFileTracker({ cwd, state, baselineDirs = [], sessionStartedAt = 0, snapshotStore, scan = {}, logger }) {
   let knownDirs = new Set(baselineDirs)
 
   function typeFor(path) {
@@ -52,6 +52,10 @@ export function createFileTracker({ cwd, state, baselineDirs = [], snapshotStore
       const changes = []
 
       // --- changed / removed, against last-known -----------------------------
+      // An adopted pre-existing entry (unbaselined) keeps its provenance on
+      // every state refresh: the flag is what stops a later modify/delete of
+      // that path from ever being treated as a session-owned resource.
+      const refresh = (known, now) => (known.unbaselined === true ? { ...now, unbaselined: true } : now)
       const removed = []
       for (const [path, known] of state) {
         const now = files.get(path)
@@ -71,7 +75,7 @@ export function createFileTracker({ cwd, state, baselineDirs = [], snapshotStore
             before: await beforeSnapshotFor(known),
             after: { ...now },
           })
-          state.set(path, now)
+          state.set(path, refresh(known, now))
         } else if (hashComparable && modeChanged) {
           // content identical, permissions differ: its own, cheap-to-restore action
           changes.push({
@@ -81,10 +85,10 @@ export function createFileTracker({ cwd, state, baselineDirs = [], snapshotStore
             before: { mode: known.mode },
             after: { ...now },
           })
-          state.set(path, now)
+          state.set(path, refresh(known, now))
         } else {
           // untouched; refresh mtime so future diffs stay cheap
-          state.set(path, now)
+          state.set(path, refresh(known, now))
         }
       }
 
@@ -92,6 +96,14 @@ export function createFileTracker({ cwd, state, baselineDirs = [], snapshotStore
       const created = []
       for (const [path, now] of files) {
         if (state.has(path)) continue
+        if (predatesSession(now, sessionStartedAt)) {
+          // existed before the session but the baseline never captured it:
+          // adopt silently as pre-existing (no journal record, no cleanup
+          // target). `unbaselined` rides on the state entry so any later
+          // modify/delete keeps that provenance in its `before` side.
+          state.set(path, { ...now, unbaselined: true })
+          continue
+        }
         created.push({ path, now })
         state.set(path, now)
       }
@@ -181,6 +193,26 @@ export function createFileTracker({ cwd, state, baselineDirs = [], snapshotStore
     const present = await snapshotStore.has(known.sha256)
     return { ...known, snapshot: present ? known.sha256 : null, snapshotUnavailable: !present }
   }
+}
+
+/** Timestamp slack absorbing same-millisecond captures and coarse FS granularity. */
+const PREEXISTING_SLACK_MS = 1000
+
+/**
+ * True when a file's timestamps prove it existed before the session started.
+ * birthtime is authoritative (session writes move mtime but never birth time);
+ * mtime is the fallback for filesystems that do not report a birth time.
+ * A path that PREDATES the session yet is missing from the baseline means the
+ * baseline never captured it (truncated scan / unreadable dir) — such a file
+ * must be adopted as pre-existing, never journalled as a session creation and
+ * never removed by cleanup.
+ */
+export function predatesSession(entry, sessionStartedAt) {
+  if (Number.isFinite(sessionStartedAt) === false || sessionStartedAt <= 0) return false
+  const birth = Number(entry?.birthtimeMs)
+  if (Number.isFinite(birth) && birth > 0) return birth < sessionStartedAt - PREEXISTING_SLACK_MS
+  const mtime = Number(entry?.mtimeMs)
+  return Number.isFinite(mtime) && mtime > 0 && mtime < sessionStartedAt - PREEXISTING_SLACK_MS
 }
 
 /** Probe whether an absolute path exists. */

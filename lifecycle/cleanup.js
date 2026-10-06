@@ -455,6 +455,15 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
       const expectedAfter = (last.side === 'from' || last.record.action === 'deleted') ? null : last.record.after
       const desired = entry.inBaseline ? 'restore' : 'remove'
 
+      // A path the session touched that PREDATES the session (born before the
+      // baseline but never captured by it — truncated scan / unreadable dir):
+      // its pre-session content was never snapshotted, so it can be neither
+      // removed nor restored. Preserve the current state and report.
+      if (entry.touches[0]?.record?.before?.unbaselined === true) {
+        actions.push({ phase: 'path', path, outcome: 'skipped', reason: 'preexisting-unbaselined' })
+        continue
+      }
+
       if (isSuspectFinalDiff(last.record) === true) {
         if (conflictMode === 'force') {
           // explicit user decision: execute the rollback anyway, conflict on record
@@ -665,6 +674,10 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     const ledger = buildPathLedger(records, baseline)
     for (const [path, entry] of ledger) {
       const last = entry.touches[entry.touches.length - 1]
+      if (entry.touches[0]?.record?.before?.unbaselined === true) {
+        actions.push({ phase: 'verify', path, outcome: 'skipped', reason: 'preexisting-unbaselined' })
+        continue
+      }
       if (isSuspectFinalDiff(last.record)) {
         actions.push({ phase: 'verify', path, outcome: 'skipped', reason: 'external-suspect' })
         continue

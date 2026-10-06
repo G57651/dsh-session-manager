@@ -348,6 +348,44 @@ const dispatch = app.dispatch
   removeSessionFromCorpus(id)
 }
 
+// --- unbaselined pre-existing files are never treated as session creations -----
+{
+  const id = 'session-unbaselined'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'old-a.txt'), 'old-a')
+  writeFileSync(join(cwd, 'old-b.txt'), 'old-b')
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 1200)) // outlive the timestamp slack
+  await call(dispatch, 'track', { ids: [id] }) // baseline captures both files
+  // simulate a truncated / missed baseline: drop the file entries on disk,
+  // then diff through a FRESH instance (a remount, like a real restart)
+  const baselinePath = join(trackingDir(id), 'baseline.json')
+  const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'))
+  baseline.files = {}
+  writeFileSync(baselinePath, JSON.stringify(baseline))
+  const restarted = boot()
+  await call(restarted.dispatch, 'track', { ids: [id] })
+
+  const changes = await call(restarted.dispatch, 'changes', { id })
+  ok(changes.value.changes.some(record => record.resource?.path === 'old-a.txt') === false, 'unbaselined: pre-existing file NOT journaled as a creation')
+  const resources = await call(restarted.dispatch, 'resources', { id })
+  ok(resources.value.resources.some(row => row.identifier === 'old-a.txt') === false, 'unbaselined: pre-existing file NOT listed in the resource view')
+
+  // a genuinely new file still journals + cleans up normally
+  writeFileSync(join(cwd, 'fresh.txt'), 'fresh')
+  await call(restarted.dispatch, 'track', { ids: [id] })
+  ok((await peek('changes', { id })).value.changes.some(record => record.resource?.path === 'fresh.txt' && record.action === 'created'), 'unbaselined: genuinely new file still journaled as created')
+
+  // modifying an adopted pre-existing file must NOT make it removable
+  writeFileSync(join(cwd, 'old-a.txt'), 'old-a-modified')
+  await call(restarted.dispatch, 'track', { ids: [id] })
+  const deleted = await call(restarted.dispatch, 'delete', { ids: [id] })
+  ok(deleted.value.results[0]?.cleanup?.state === 'rollback_verified', `unbaselined: cleanup verified (got ${JSON.stringify(deleted.value.results[0]?.cleanup)})`)
+  ok(existsSync(join(cwd, 'old-a.txt')) && readFileSync(join(cwd, 'old-a.txt'), 'utf8') === 'old-a-modified', `unbaselined: pre-existing modified file PRESERVED [exists=${existsSync(join(cwd, 'old-a.txt'))} content=${existsSync(join(cwd, 'old-a.txt')) ? JSON.stringify(readFileSync(join(cwd, 'old-a.txt'), 'utf8')) : 'n/a'}]`)
+  ok(existsSync(join(cwd, 'old-b.txt')), 'unbaselined: untouched pre-existing file preserved')
+  ok(!existsSync(join(cwd, 'fresh.txt')), 'unbaselined: session-created file still removed')
+  removeSessionFromCorpus(id)
+}
+
 // --- Case 6: env var created → unset on cleanup --------------------------------
 {
   const id = 'session-case6'
@@ -356,14 +394,25 @@ const dispatch = app.dispatch
   await call(dispatch, 'track', { ids: [id] })
 
   await app.toolCall(id, 'bash', { command: 'export DSM_LIFE_FOO=123' })
-  ok(await waitFor(async () => 'DSM_LIFE_FOO' in process.env && (await peek('changes', { id })).value.total >= 1), 'case6: env applied at record time and journaled')
+  ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 1), 'case6: env mutation journaled')
+  ok(!('DSM_LIFE_FOO' in process.env), 'case6: host process env NOT mutated (record-only)')
   const changes = await call(dispatch, 'changes', { id })
   const setRecord = changes.value.changes.find(record => record.resourceType === 'environment_variable')
   ok(setRecord?.action === 'set' && setRecord.before === null && setRecord.after?.value === '123', 'case6: set journaled with before=null')
 
+  // runtime-affecting variables are excluded from tracking outright
+  {
+    const before = (await peek('changes', { id })).value.total
+    const pathBefore = process.env.PATH
+    await app.toolCall(id, 'bash', { command: 'export PATH=/tmp/evil:$PATH' })
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
+    ok((await peek('changes', { id })).value.total === before, 'case6: PATH mutation NOT journaled (excluded)')
+    ok(process.env.PATH === pathBefore, 'case6: PATH untouched on the host')
+  }
+
   const result = await call(dispatch, 'delete', { ids: [id] })
   ok(result.value.results[0]?.ok === true, 'case6: delete ok')
-  ok(!('DSM_LIFE_FOO' in process.env), 'case6: session-created env var unset by cleanup')
+  ok(!('DSM_LIFE_FOO' in process.env), 'case6: session-created env var stays unset')
   removeSessionFromCorpus(id)
 }
 
@@ -383,13 +432,15 @@ const dispatch = app.dispatch
   ok(barRecord?.before?.value === 'old' && barRecord.after?.value === 'new', 'case7: non-secret values journalled in plaintext')
   ok(tokenRecord?.before?.redacted === true && tokenRecord.before.value === undefined && tokenRecord.before.hash !== undefined, 'case7: secret value redacted, existence+fingerprint kept')
 
+  ok(process.env.DSM_LIFE_BAR === 'old', 'case7: host env untouched while the session ran (record-only)')
+  // an external change to the secret AFTER the session: its plaintext was
+  // never journalled (requirement §十四), so rollback cannot be automated —
+  // cleanup records the conflict and leaves the decision to the user
+  process.env.DSM_LIFE_TOKEN = 'externally-changed'
   const result = await call(dispatch, 'delete', { ids: [id] })
   ok(result.value.results[0]?.ok === true, 'case7: delete ok')
-  ok(process.env.DSM_LIFE_BAR === 'old', `case7: non-secret env restored to old, got ${process.env.DSM_LIFE_BAR}`)
-  // the secret's plaintext was never journalled (requirement §十四), so its
-  // rollback cannot be automated: cleanup records the conflict and leaves the
-  // decision to the user instead of guessing (safe mode)
-  ok(process.env.DSM_LIFE_TOKEN === 'sekrit-new', 'case7: secret var untouched by automated rollback')
+  ok(process.env.DSM_LIFE_BAR === 'old', `case7: non-secret env stays at old, got ${process.env.DSM_LIFE_BAR}`)
+  ok(process.env.DSM_LIFE_TOKEN === 'externally-changed', 'case7: secret var untouched by automated rollback')
   const status = await call(dispatch, 'cleanupStatus', { ids: [id] })
   const tokenConflict = status.value.results[0]?.cleanup?.conflicts?.find(conflict => conflict.phase === 'env' && conflict.name === 'DSM_LIFE_TOKEN')
   ok(tokenConflict?.reason?.startsWith('secret-unrecoverable'), 'case7: secret-unrecoverable conflict recorded')

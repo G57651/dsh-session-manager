@@ -227,10 +227,11 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 **变更捕获的边界**
 
 - 跟踪是「事件 + diff」混合式：`tool/call` 解析 shell 命令、`tool/result` 触发防抖 diff、删除前补最终 diff。子进程内部的临时文件、管道、不落盘副作用无法观测；工作区之外的文件（`$DSH_HOME` 自身、其他目录）不在资源边界内。
-- host 半只能观测 / 恢复**自身进程**的环境变量（`scope: 'host-process'`）；工具子 shell 里的 `export` 随子进程消亡，记录仅为审计与生命周期语义。
+- host 半**只记录**环境变量变更、**绝不改写宿主进程 env**：工具子 shell 里的 `export` 随子进程消亡，把解析值写回宿主会让会话命令污染 harness 自身的运行环境（PATH / NODE_OPTIONS 等）。敏感运行变量（PATH、NODE_OPTIONS、LD_*/DYLD_*、HOME、DSH_HOME 等）直接排除出跟踪；清理阶段的 env 恢复对「宿主从未改变过」的变量是刻意的 no-op。
 - 真机实测注意：宿主会为会话发出 title 等后台事件，它们会计入「活跃」判定——外部修改若落在空闲窗口（`trackingIdleWindowMs`，默认 5 分钟）内，删除时会按会话变更参与校验。需要更保守边界可将该值调小。
 - 依赖卸载 = 移除包目录（离线安全、幂等，package.json/lockfile 由文件级回滚恢复）；已有依赖的自动降级/重装不做，仅报告。pip 等其它管理器按适配器接口扩展。
 - 超过 `trackingMaxSnapshotBytes` 的文件只记哈希，无法自动恢复（清理报告 `snapshot-unavailable`）。
+- **基线截断保护（0.3.4）**：工作区超过 `trackingMaxFiles` 时基线会有遗漏；遗漏的既有文件由 **birthtime 二次判定**识别（早于会话开始 = 既有），被静默收养为 preexisting——不会出现在资源视图、绝不被清理移除；若会话修改了这类文件，回滚跳过并报告 `preexisting-unbaselined`（原内容未被快照，无法恢复）。真机截断场景实测：既有文件全部保留、会话新建文件照常清理。
 
 **面板语义（0.1.x 起）**
 
@@ -240,6 +241,13 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 - **打开资源**：仅调用本机文件管理器——macOS `open -R`（访达定位）、Windows `explorer /select`（资源管理器选中）、Linux `xdg-open`（打开父目录）；所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
 
 ## 变更记录
+
+### 0.3.4（高危缺口修复：截断误删防护 + 环境变量不再污染宿主）
+
+- **修复基线截断可能误删既有文件**：基线扫描超过 `trackingMaxFiles`（默认 5000）时会截断，未收录的既有文件在首次 diff 时会被误判为「会话新建」——删除会话时就可能删掉它们（你的 default-workspace 已触发截断条件）。现在用 **birthtime 二次判定**（扫描已记录；无 birthtime 的 FS 回退 mtime）：早于会话开始的文件一律**静默收养为既有资源**——不写 Journal、不进资源视图、绝不被清理移除；会话对这类文件的修改/删除在回滚时跳过并报告 `preexisting-unbaselined`（原内容未被快照，无法恢复）。状态刷新时保留 `unbaselined` 血统标记，`before` 侧全程携带。
+- **修复环境变量解析污染宿主进程**：旧行为会把 `export FOO=bar` 的值应用到宿主进程 env——一条会话命令（如 `export PATH=...`、`NODE_OPTIONS`）会真实影响 harness 后续所有子进程。现在**只记录、绝不改写宿主 env**；并把 PATH / NODE_OPTIONS / NODE_PATH / LD_* / DYLD_* / HOME / TMPDIR / SHELL / IFS / DSH_HOME 等运行性变量直接排除出跟踪。清理阶段的 env 恢复对「宿主从未改变」的变量是刻意 no-op。
+- **修复 `session-manage.js` 的一处作用域缺陷**：资源清理异常处理器引用了不在作用域的 `logger`，会把真实的清理错误掩盖成 `logger is not defined`（本轮回归首次触发暴露）。
+- **测试**：`smoke-lifecycle.mjs` 增至 181 项断言，新增：模拟截断基线的静默收养（既有文件不写 Journal/不进视图/不被删除、被修改后仍保留）、真新建文件照常清理、PATH 排除、宿主 env 不被改写；连跑三轮全绿。真机（隔离宿主）复验：驱动 29/29、真实 agent 回合 8/8、**截断场景 5/5**（既有文件全部保留 + 新建文件正常清理）。
 
 ### 0.3.3（修复已删除会话的 tracking 目录复活）
 

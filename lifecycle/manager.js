@@ -323,6 +323,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
       cwd: baseline.cwd,
       state,
       baselineDirs: [...initialDirs],
+      sessionStartedAt: Number(baseline.capturedAt) || 0,
       baselineDeps,
       snapshotStore: stores.snapshotStore,
       scan: scanBounds(),
@@ -453,16 +454,14 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     const command = typeof call?.command === 'string' ? call.command : ''
 
     if (command !== '') {
-      // persistent env mutations from shell syntax: journaled AND applied to
-      // the plugin's process env — that env is the only scope the host side
-      // can actually manage, and applying at record time is what gives the
-      // journal's before/after real restore semantics
+      // persistent env mutations from shell syntax are RECORDED ONLY. A tool's
+      // child shell dies with its environment, so applying the parsed value to
+      // the host process (the old behaviour) would let a session command
+      // mutate the harness's own env (PATH / NODE_OPTIONS / ...) for every
+      // later spawn. Restore against the host env stays a no-op by design.
       for (const mutation of parseEnvCommand(command)) {
         const change = runtime.trackers.env.classify(mutation)
-        if (change !== null) {
-          await record(runtime, change)
-          runtime.trackers.env.apply(mutation.name, mutation.kind === 'unset' ? null : mutation.rawValue)
-        }
+        if (change !== null) await record(runtime, change)
       }
       // background spawns
       const spawnChange = runtime.trackers.process.classify({ command })

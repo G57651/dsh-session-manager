@@ -80,7 +80,9 @@ export async function scanWorkspace({ cwd, maxFiles = 5000, maxDepth = 12, exclu
       }
       const info = await stat(absolutePath).catch(() => null)
       if (info === null) continue
-      const record = { sha256: null, size: info.size, mode: info.mode, mtimeMs: info.mtimeMs }
+      // birthtimeMs is the strongest "did this file exist before the session"
+      // signal (mtime moves on every write; birth time does not)
+      const record = { sha256: null, size: info.size, mode: info.mode, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs }
       if (info.size <= maxHashBytes) {
         try {
           const content = await readFile(absolutePath)

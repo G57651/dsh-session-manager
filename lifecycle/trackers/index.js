@@ -21,9 +21,9 @@ import { createDownloadTracker, createProcessTracker } from './observe.js'
  * @param {object} [opts.scan] file-scan bounds
  * @param {object} [opts.logger]
  */
-export function createDefaultTrackers({ cwd, state, baselineDirs = [], baselineDeps, snapshotStore, scan, logger }) {
+export function createDefaultTrackers({ cwd, state, baselineDirs = [], sessionStartedAt = 0, baselineDeps, snapshotStore, scan, logger }) {
   return {
-    file: createFileTracker({ cwd, state, baselineDirs, snapshotStore, scan, logger }),
+    file: createFileTracker({ cwd, state, baselineDirs, sessionStartedAt, snapshotStore, scan, logger }),
     dependency: createDependencyTracker({ cwd, baselineInstalled: baselineDeps, logger }),
     env: createEnvTracker({ logger }),
     download: createDownloadTracker({ logger }),
