@@ -111,6 +111,7 @@ host 半经 `/dsh-session-manager` 通道服务（批量端点接受 `ids` 数�
 | `cleanup` | `{ ids, mode }` | `rollback-only`（回滚资源保留会话）/ `resume` / `full` | **0.2.0** |
 | `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试） | **0.2.0** |
 | `openResource` | `{ id, path }` | 在本机文件管理器中显示会话资源（访达定位 / 资源管理器选中）；路径仅限该会话工作区内 | **0.3.0** |
+| `deleteResources` | `{ id, paths }` | 将会话资源**移入本机废纸篓**（可恢复）；路径仅限该会话工作区内，逐条返回结果 | **0.4.0** |
 
 `delete` / `purge` / `restore` 返回值新增可选 `cleanup` / `journalRemoved` 字段——旧客户端忽略即可。
 
@@ -242,6 +243,14 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：Case 1-10 + �
 - **打开资源**：仅调用本机文件管理器——macOS `open -R`（访达定位）、Windows `explorer /select`（资源管理器选中）、Linux `xdg-open`（打开父目录）；所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
 
 ## 变更记录
+
+### 0.4.0（资源删除：移入废纸篓 + 弹窗批量删除）
+
+- **新增资源删除**：资源弹窗内每个文件类资源行新增「删除」按钮，勾选后可「删除所选（N）」批量删除——删除的文件**移入本机废纸篓**（macOS 废纸篓 / Windows 回收站 / Linux XDG trash），可从系统废纸篓恢复，绝不直接销毁。
+- 平台策略：macOS 优先同卷 `rename` 进 `~/.Trash`（重名自动编号），跨卷（iCloud 工作区）回退 Finder 删除（osascript）；Windows 经 PowerShell 回收站 COM API（参数单引号转义）；Linux 优先 `gio trash`，无 GVfs 时直接实现 XDG trash 规范（files + info/.trashinfo）。
+- 新增 RPC `deleteResources { id, paths }`：路径仅限该会话工作区内（越界 / 缺失 / 未跟踪逐条报 `unsafe-path` / `resource-missing` / `untracked`），进程启动全部 argv 数组无 shell 拼接（Windows PowerShell 参数做元字符校验）。
+- 删除后资源弹窗自动刷新（被删资源状态转为已不存在）。
+- 测试：`smoke-lifecycle.mjs` 增至 **309 项断言**（新增：移入废纸篓且内容完好、路径越界/缺失守卫、双文件批量删除）；渲染冒烟新增删除按钮断言。
 
 ### 0.3.9（资源弹窗布局修复 + 一键清除选择）
 

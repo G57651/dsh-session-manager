@@ -32,6 +32,7 @@ process.env.DSH_SM_OPEN_MODE = 'log'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const home = mkdtempSync(join(tmpdir(), 'dsm-life-'))
 process.env.DSH_HOME = home
+process.env.DSH_SM_TRASH_DIR = join(home, '.Trash')
 
 const NOW = Date.now()
 let checks = 0
@@ -1083,6 +1084,35 @@ function forceBoot() {
   ok(existsSync(join(cwd, 'p2.txt')) && existsSync(join(cwd, 'p3.txt')) && existsSync(join(cwd, 'p4.txt')), 'fullbudget: other pre-existing files kept')
   removeSessionFromCorpus(id)
   rmSync(trackingDir(id), { recursive: true, force: true })
+}
+
+{
+  // deleteResources: selected files go to the TRASH (recoverable), never
+  // destroyed in place
+  const id = 'session-trash'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 't.txt'), 'trash me')
+  writeFileSync(join(cwd, 'u.txt'), 'keep me')
+  await call(dispatch, 'track', { ids: [id] })
+  const result = await call(dispatch, 'deleteResources', { id, paths: ['t.txt'] })
+  ok(result.value.results[0]?.ok === true, `trash: RPC ok (got ${JSON.stringify(result.value.results[0])})`)
+  ok(!existsSync(join(cwd, 't.txt')), 'trash: file gone from the workspace')
+  const trashTarget = join(process.env.DSH_SM_TRASH_DIR, 't.txt')
+  ok(existsSync(trashTarget) && readFileSync(trashTarget, 'utf8') === 'trash me', 'trash: file INTACT inside the wastebasket')
+  ok(existsSync(join(cwd, 'u.txt')), 'trash: unselected file untouched')
+  // guards: traversal and missing files
+  const bad = await call(dispatch, 'deleteResources', { id, paths: ['../escape.txt'] })
+  ok(bad.value.results[0]?.ok === false && bad.value.results[0]?.error?.code === 'unsafe-path', 'trash: traversal rejected')
+  const missing = await call(dispatch, 'deleteResources', { id, paths: ['nope.txt'] })
+  ok(missing.value.results[0]?.ok === false && missing.value.results[0]?.error?.code === 'resource-missing', 'trash: missing file rejected')
+  // batch: two paths in one call
+  writeFileSync(join(cwd, 'b1.txt'), 'b1')
+  writeFileSync(join(cwd, 'b2.txt'), 'b2')
+  const batch = await call(dispatch, 'deleteResources', { id, paths: ['b1.txt', 'b2.txt'] })
+  ok(batch.value.results.filter(entry => entry.ok === true).length === 2, 'trash: batch of two trashed')
+  ok(!existsSync(join(cwd, 'b1.txt')) && !existsSync(join(cwd, 'b2.txt')), 'trash: both gone from the workspace')
+  removeSessionFromCorpus(id)
 }
 
 // --- dispose -----------------------------------------------------------------------

@@ -70,6 +70,10 @@ window.__ModuleLoader__.load({
 				  'purge.more': '以及另外 {n} 个会话',
 				  'res.title': '会话资源',
 				  'res.fileManagerHint': '将在本机文件管理器中显示（访达 / 资源管理器）',
+				  'res.deleteSelected': '删除所选（{n}）',
+				  'res.deleteRow': '删除',
+				  'res.batchDeleted': '已将 {n} 个文件移入废纸篓',
+				  'res.deleteFailed': '删除失败（{reason}）',
 				  'res.selectAll': '全选',
 				  'res.clearSelected': '清除选择',
 				  'res.invert': '反选',
@@ -176,6 +180,10 @@ window.__ModuleLoader__.load({
 				  'purge.more': 'and {n} more',
 				  'res.title': 'Session resources',
 				  'res.fileManagerHint': 'Reveals in your file manager (Finder / Explorer)',
+				  'res.deleteSelected': 'Delete selected ({n})',
+				  'res.deleteRow': 'Delete',
+				  'res.batchDeleted': '{n} file(s) moved to the wastebasket',
+				  'res.deleteFailed': 'Delete failed ({reason})',
 				  'res.selectAll': 'Select all',
 				  'res.clearSelected': 'Clear selection',
 				  'res.invert': 'Invert',
@@ -283,6 +291,7 @@ window.__ModuleLoader__.load({
 		    resources: id => call('resources', { id }),
 		    cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
 		    openResource: (id, path) => call('openResource', { id, path }),
+		    deleteResources: (id, paths) => call('deleteResources', { id, paths }),
 		  }
 		}
 
@@ -549,6 +558,45 @@ window.__ModuleLoader__.load({
 		    }
 		  }
 
+		  /** Move one resource to the OS wastebasket (user-initiated, recoverable). */
+		  async function deleteOne(sessionId, path) {
+		    const result = await api.deleteResources(sessionId, [path])
+		    if (result?.ok !== true) {
+		      console.warn('[dsh-session-manager] deleteResources failed:', describeError(result?.error))
+		      instance.actions.setNotice({ tone: 'error', text: t('res.deleteFailed', { reason: formatError(result?.error) }) })
+		      return false
+		    }
+		    const failed = (result.value?.results ?? []).filter(entry => entry.ok !== true)
+		    if (failed.length > 0) {
+		      const reason = formatError(failed[0]?.error)
+		      console.warn('[dsh-session-manager] deleteResources per-path failure:', reason)
+		      instance.actions.setNotice({ tone: 'error', text: t('res.deleteFailed', { reason }) })
+		      return false
+		    }
+		    return true
+		  }
+
+		  /** Batch-move every selected resource to the wastebasket, then refresh. */
+		  async function deleteSelected() {
+		    const detail = instance.getSnapshot().detail
+		    if (detail === null || detail.busy === true) return
+		    const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
+		    const targets = detail.selected.map(key => rowsByKey.get(key)).filter(row => row !== undefined && OPENABLE_TYPES.has(row.resourceType))
+		    if (targets.length === 0) return
+		    instance.actions.setDetailBusy(true)
+		    let failures = 0
+		    for (const row of targets) {
+		      const ok = await deleteOne(detail.id, row.identifier)
+		      if (ok !== true) failures += 1
+		    }
+		    instance.actions.setDetailBusy(false)
+		    if (failures === 0) {
+		      instance.actions.setNotice({ tone: 'info', text: t('res.batchDeleted', { n: targets.length }) })
+		      instance.actions.setDetailSelected([])
+		    }
+		    await openResources(detail.id) // statuses changed — refresh the modal
+		  }
+
 		  /** Reveal the session workspace itself in the file manager. */
 		  async function openWorkspace() {
 		    const detail = instance.getSnapshot().detail
@@ -564,7 +612,7 @@ window.__ModuleLoader__.load({
 		    }
 		  }
 
-		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, openWorkspace, dispose }
+		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteSelected, openWorkspace, dispose }
 		}
 
 		/** Stable per-row key used by the modal's batch selection. */
@@ -907,6 +955,14 @@ window.__ModuleLoader__.load({
 		            onClick: () => actions.setDetailSelected([]),
 		          }, t('res.clearSelected')),
 		          h(Button, {
+		            key: 'batchDelete',
+		            variant: 'ghost',
+		            size: 'sm',
+		            className: 'dsm-dangerButton',
+		            disabled: detail.selected.length === 0 || detail.busy === true,
+		            onClick: () => void controller.deleteSelected(),
+		          }, t('res.deleteSelected', { n: detail.selected.length })),
+		          h(Button, {
 		            key: 'batch',
 		            variant: 'ghost',
 		            size: 'sm',
@@ -951,6 +1007,15 @@ window.__ModuleLoader__.load({
 		                      disabled: detail.busy === true,
 		                      onClick: () => void controller.openOne(detail.id, row.identifier),
 		                    }, t('res.open')),
+		                    openable === true && h(Button, {
+		                      key: 'delete',
+		                      variant: 'ghost',
+		                      size: 'sm',
+		                      className: 'dsm-dangerButton',
+		                      'aria-label': t('res.deleteRow'),
+		                      disabled: detail.busy === true,
+		                      onClick: () => void controller.deleteOne(detail.id, row.identifier).then(() => controller.openResources(detail.id)),
+		                    }, t('res.deleteRow')),
 		                  ),
 		                )
 		              })),

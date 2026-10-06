@@ -113,7 +113,7 @@ function clampNumber(value, min, max, fallback) {
  * @param {() => object} opts.getConfig resolved config snapshot (volatile-aware)
  * @param {object} [opts.logger]
  */
-export function createSessionResourceManager({ dshHome, ctx, manifest, opener, getConfig, logger }) {
+export function createSessionResourceManager({ dshHome, ctx, manifest, opener, trash, getConfig, logger }) {
   const trackingRoot = join(dshHome, 'dsh-session-manager', 'tracking')
   const runtimes = new Map() // sessionId → runtime
   const baselineJobs = new Map() // sessionId → in-flight capture promise
@@ -962,6 +962,48 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     }
   }
 
+  /**
+   * Move session resources to the OS wastebasket (user-initiated deletion —
+   * recoverable). Every path is workspace-relative and must resolve inside
+   * the session's baseline cwd; the OS trash API does the rest.
+   */
+  async function deleteResources(sessionId, paths) {
+    const list = Array.isArray(paths) ? paths.filter(path => typeof path === 'string' && path !== '') : []
+    if (list.length === 0) {
+      return { results: [] }
+    }
+    if (trash === undefined) {
+      return list.map(path => ({ path, ok: false, error: { code: 'trash-unavailable', message: 'the OS wastebasket integration is not available' } }))
+    }
+    const baseline = await storesFor(sessionId).baselineStore.load()
+    if (baseline === null || typeof baseline.cwd !== 'string') {
+      return list.map(path => ({ path, ok: false, error: { code: 'untracked', message: 'this session has no resource baseline (legacy or already cleaned)' } }))
+    }
+    const cwd = resolve(baseline.cwd)
+    const results = []
+    for (const relativePath of list) {
+      const absolute = resolve(cwd, relativePath)
+      // the workspace root itself is not deletable through this surface
+      if (absolute === cwd || isInsideRoot(absolute, cwd) === false) {
+        results.push({ path: relativePath, ok: false, error: { code: 'unsafe-path', message: 'the resource path escapes the session workspace' } })
+        continue
+      }
+      const info = await stat(absolute).catch(() => null)
+      if (info === null) {
+        results.push({ path: relativePath, ok: false, error: { code: 'resource-missing', message: 'the resource no longer exists on disk' } })
+        continue
+      }
+      try {
+        const trashed = await trash.moveToTrash(absolute)
+        results.push({ path: relativePath, ok: true, via: trashed.via, trashPath: trashed.trashPath ?? null })
+      } catch (error) {
+        logger?.warn?.(`[dsh-session-manager] trash ${relativePath} failed: ${error?.message ?? error}`)
+        results.push({ path: relativePath, ok: false, error: { code: error?.code ?? 'trash-failed', message: error?.message ?? 'trash-failed' } })
+      }
+    }
+    return { results }
+  }
+
   /** Cleanup status for the RPC layer. */
   async function getCleanupStatus(sessionId) {
     const stores = storesFor(sessionId)
@@ -1101,6 +1143,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     getCleanupStatus,
     cleanupSession,
     openResource,
+    deleteResources,
     sweepKnownSessions,
     isTracked,
     cancelPendingCleanup,

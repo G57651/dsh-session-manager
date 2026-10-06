@@ -18,6 +18,7 @@
 //   cleanup       { ids, mode }         -> 'rollback-only' | 'resume' | 'full'
 //   track         { ids }               -> run one diff pass now (ops/debug)
 //   openResource  { id, path }          -> reveal in the OS file manager
+//   deleteResources { id, paths }       -> move resources to the OS wastebasket
 //
 // Every handler returns `{ ok: true, value }` or `{ ok: false, error }`;
 // batch endpoints take a single `ids` array so one RPC covers both the
@@ -45,6 +46,7 @@ import {
 } from './session-manage.js'
 import { createSessionResourceManager } from './lifecycle/manager.js'
 import { createOpener } from './lifecycle/opener.js'
+import { createTrash } from './lifecycle/trash.js'
 
 export const name = 'dsh-session-manager'
 // The endpoints resolve their services lazily via `ctx.get` at call time, but
@@ -337,11 +339,13 @@ export function apply(ctx, config) {
   const titleCache = createTitleCache(join(dshHome, 'dsh-session-manager-titles.json'), logger)
   const purgeTracker = createPurgeTracker()
   const opener = createOpener()
+  const trash = createTrash({ logger })
   const resourceManager = createSessionResourceManager({
     dshHome,
     ctx,
     manifest,
     opener,
+    trash,
     getConfig: () => readConfig(config),
     logger,
   })
@@ -516,6 +520,26 @@ export function apply(ctx, config) {
       }, logger),
     },
     // open a resource in the OS file manager (the only open method)
+    deleteResources: {
+      audit: true,
+      handle: async (payload) => {
+        const id = typeof payload?.id === 'string' ? payload.id : ''
+        if (id === '') return fail('no-ids', 'a single session id is required')
+        const paths = Array.isArray(payload?.paths) ? payload.paths.filter(path => typeof path === 'string' && path !== '') : []
+        if (paths.length === 0) return fail('no-paths', 'at least one resource path is required')
+        try {
+          const value = await resourceManager.deleteResources(id, paths)
+          const failed = value.results.filter(result => result.ok !== true)
+          if (failed.length > 0) {
+            logger?.warn?.(`[dsh-session-manager] deleteResources: ${failed.length} of ${value.results.length} failed: ${failed[0]?.error?.code ?? 'unknown'}`)
+          }
+          return { ok: true, value }
+        } catch (error) {
+          logger?.warn?.(`[dsh-session-manager] deleteResources failed: ${error?.message ?? error}`)
+          return fail('internal', error?.message ?? 'delete-resources-failed')
+        }
+      },
+    },
     openResource: {
       handle: async (payload) => {
         const id = typeof payload?.id === 'string' ? payload.id : ''
