@@ -132,7 +132,20 @@ async function waitFor(predicate, { timeout = 4000, step = 20 } = {}) {
 
 const sessionsRoot = () => join(home, 'sessions', '--tmp-project--')
 const sessionDir = id => join(sessionsRoot(), id)
-const trackingDir = id => join(home, 'dsh-session-manager', 'tracking', id)
+const trackingDir = id => join(home, 'dsh-session-manager', 'tracking', encodeSegmentForTest(String(id)))
+
+function encodeSegmentForTest(input) {
+  return String(input).replace(/[^A-Za-z0-9._-]/g, char => '~' + char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'))
+}
+
+/** Session whose on-disk directory uses the ENCODED id (like the real layout). */
+function makeSessionDir(rawId, encodedId) {
+  const cwd = join(home, 'workspaces', encodedId)
+  mkdirSync(cwd, { recursive: true })
+  mkdirSync(join(sessionsRoot(), encodedId), { recursive: true })
+  workspaces.set(rawId, cwd)
+  return cwd
+}
 
 function makeSession(id) {
   const cwd = join(home, 'workspaces', id)
@@ -150,7 +163,6 @@ const read = path => (existsSync(path) ? readFileSync(path, 'utf8') : null)
 
 // load the host half once; boot() per plugin instance
 const hostModule = await import(new URL('../index.js', import.meta.url).href)
-const manage = await import(new URL('../session-manage.js', import.meta.url)).then(m => m)
 
 const app = boot()
 const dispatch = app.dispatch
@@ -435,17 +447,14 @@ const dispatch = app.dispatch
   ok(tokenRecord?.before?.redacted === true && tokenRecord.before.value === undefined && tokenRecord.before.hash !== undefined, 'case7: secret value redacted, existence+fingerprint kept')
 
   ok(process.env.DSM_LIFE_BAR === 'old', 'case7: host env untouched while the session ran (record-only)')
-  // an external change to the secret AFTER the session: its plaintext was
-  // never journalled (requirement §十四), so rollback cannot be automated —
-  // cleanup records the conflict and leaves the decision to the user
+  // cleanup must NEVER write the host env: whatever value it holds now is
+  // somebody else's business, and env records are audit-only
   process.env.DSM_LIFE_TOKEN = 'externally-changed'
   const result = await call(dispatch, 'delete', { ids: [id] })
   ok(result.value.results[0]?.ok === true, 'case7: delete ok')
+  ok(result.value.results[0]?.cleanup?.state === 'rollback_verified', `case7: verified without env writes (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
   ok(process.env.DSM_LIFE_BAR === 'old', `case7: non-secret env stays at old, got ${process.env.DSM_LIFE_BAR}`)
-  ok(process.env.DSM_LIFE_TOKEN === 'externally-changed', 'case7: secret var untouched by automated rollback')
-  const status = await call(dispatch, 'cleanupStatus', { ids: [id] })
-  const tokenConflict = status.value.results[0]?.cleanup?.conflicts?.find(conflict => conflict.phase === 'env' && conflict.name === 'DSM_LIFE_TOKEN')
-  ok(tokenConflict?.reason?.startsWith('secret-unrecoverable'), 'case7: secret-unrecoverable conflict recorded')
+  ok(process.env.DSM_LIFE_TOKEN === 'externally-changed', 'case7: secret var untouched by cleanup')
   delete process.env.DSM_LIFE_BAR
   delete process.env.DSM_LIFE_TOKEN
   removeSessionFromCorpus(id)
@@ -471,7 +480,6 @@ const dispatch = app.dispatch
 
   // "restart": a fresh plugin instance over the same $DSH_HOME
   const restarted = boot()
-  await restarted.dispatch('__warmup__', {}).catch(() => {}) // no-op; bootstrap ran inside apply()
   // give the fire-and-forget bootstrap a moment
   await new Promise(resolvePromise => setTimeout(resolvePromise, 150))
 
@@ -557,10 +565,8 @@ function forceBoot() {
   ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 1), 'env-ext: mutation journaled')
   process.env.DSM_EXT_FOO = 'externally-set' // the plugin never applied it; this is someone else's value
   const result = await call(dispatch, 'delete', { ids: [id] })
-  ok(result.value.results[0]?.cleanup?.state === 'rollback_failed', `env-ext: conflict instead of blind unset (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
+  ok(result.value.results[0]?.cleanup?.state === 'rollback_verified', `env-ext: cleanup verified, env never written (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
   ok(process.env.DSM_EXT_FOO === 'externally-set', 'env-ext: externally-set value NOT deleted')
-  const status = await call(dispatch, 'cleanupStatus', { ids: [id] })
-  ok(status.value.results[0]?.cleanup?.conflicts?.some(conflict => conflict.phase === 'env' && conflict.name === 'DSM_EXT_FOO' && conflict.reason === 'externally-modified-after-session'), 'env-ext: conflict recorded with reason')
   delete process.env.DSM_EXT_FOO
   removeSessionFromCorpus(id)
 
@@ -573,7 +579,7 @@ function forceBoot() {
   ok(await waitFor(async () => (await peek('changes', { id: id2 })).value.total >= 1), 'env-ext: modify journaled')
   delete process.env.DSM_EXT_BAR // external unset
   const result2 = await call(dispatch, 'delete', { ids: [id2] })
-  ok(result2.value.results[0]?.cleanup?.state === 'rollback_failed', `env-ext: external unset conflicts, not resurrected (got ${JSON.stringify(result2.value.results[0]?.cleanup)})`)
+  ok(result2.value.results[0]?.cleanup?.state === 'rollback_verified', `env-ext: cleanup verified, nothing resurrected (got ${JSON.stringify(result2.value.results[0]?.cleanup)})`)
   ok(!('DSM_EXT_BAR' in process.env), 'env-ext: externally-unset variable NOT resurrected')
   delete process.env.DSM_EXT_BAR
   removeSessionFromCorpus(id2)
@@ -671,7 +677,6 @@ function forceBoot() {
   // Instance B is a normal restart (autoResume on): the resume pass must now
   // skip the cancelled session entirely.
   const restarted = bootWith({ autoResume: true })
-  await restarted.dispatch('__warmup__', {}).catch(() => {})
   await new Promise(resolvePromise => setTimeout(resolvePromise, 150))
   ok(existsSync(sessionDir(id)), 'cancel: restored session directory untouched by resume')
   ok(existsSync(join(cwd, 'gen.txt')), 'cancel: session resources untouched by resume')
@@ -712,6 +717,105 @@ function forceBoot() {
   ok(result.ok === false && result.error.code === 'untracked', 'open: untracked session reported')
 
   removeSessionFromCorpus(id)
+}
+
+// --- audit regressions (red-capable: each targets one audited bug) -------------
+{
+  // S1: created → deleted by the session → externally recreated must CONFLICT,
+  // never be silently removed (the remove branch skipped the check when the
+  // expected after-state was null)
+  const id = 'session-recreate'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'temp.txt'), 'v1')
+  await call(dispatch, 'track', { ids: [id] })
+  rmSync(join(cwd, 'temp.txt'))
+  await call(dispatch, 'track', { ids: [id] })     // deleted
+  writeFileSync(join(cwd, 'temp.txt'), 'external') // recreated AFTER the journal closed
+  // residue path: a pending cleanup resumes STRAIGHT into rollback (no final
+  // diff to re-attribute the recreation), which is exactly where the old code
+  // silently removed it because the expected after-state was null
+  writeFileSync(join(trackingDir(id), 'cleanup.json'), `${JSON.stringify({
+    version: 1, sessionId: id, state: 'delete_requested', mode: 'rollback-only', requestedAt: NOW, attempts: 0, results: [], conflicts: [], failures: [],
+  })}\n`)
+  const result = await call(dispatch, 'cleanup', { ids: [id], mode: 'resume' })
+  ok(result.value.results[0]?.state === 'rollback_failed', `recreate: conflict instead of silent removal (got ${JSON.stringify(result.value.results[0])})`)
+  ok(read(join(cwd, 'temp.txt')) === 'external', 'recreate: externally recreated file NOT deleted')
+  removeSessionFromCorpus(id)
+}
+{
+  // S3: trackingExclude must ADD to the defaults, not replace them
+  const id = 'session-excludes'
+  const cwd = makeSession(id)
+  mkdirSync(join(cwd, 'node_modules', 'x'), { recursive: true })
+  mkdirSync(join(cwd, 'custom-dir'), { recursive: true })
+  mkdirSync(join(cwd, 'src'), { recursive: true })
+  const custom = bootWith({ trackingExclude: ['custom-dir'] })
+  await call(custom.dispatch, 'track', { ids: [id] })
+  const baseline = JSON.parse(readFileSync(join(trackingDir(id), 'baseline.json'), 'utf8'))
+  ok(baseline.dirs.includes('node_modules') === false, 'excludes: default excludes survive a custom trackingExclude')
+  ok(baseline.dirs.includes('custom-dir') === false, 'excludes: custom exclude applied')
+  ok(baseline.dirs.includes('src') === true, 'excludes: ordinary dirs tracked')
+  removeSessionFromCorpus(id)
+  rmSync(trackingDir(id), { recursive: true, force: true })
+}
+{
+  // S5: a session-created file edited again stays session_created (the label
+  // must answer "was it in the baseline", not "what was the last action")
+  const id = 'session-ownership'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'own.txt'), 'v1')
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'own.txt'), 'v2')
+  await call(dispatch, 'track', { ids: [id] })
+  const changes = await call(dispatch, 'changes', { id })
+  const last = changes.value.changes.filter(record => record.resource?.path === 'own.txt').at(-1)
+  ok(last?.action === 'modified' && last?.ownership === 'session_created', `ownership: re-edited created file stays session_created (got ${last?.ownership})`)
+  removeSessionFromCorpus(id)
+  rmSync(trackingDir(id), { recursive: true, force: true })
+}
+{
+  // S4: a file whose content was never snapshotted (oversize) must report
+  // snapshot-unavailable, not the misleading snapshot-missing
+  const small = bootWith({ trackingMaxSnapshotBytes: 1024 })
+  const id = 'session-bigfile'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'big.bin'), 'x'.repeat(8192))
+  await call(small.dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'big.bin'), 'y'.repeat(8192))
+  await call(small.dispatch, 'track', { ids: [id] })
+  const result = await call(small.dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.cleanup?.state === 'rollback_failed', 'bigfile: unrestorable modify is a reported failure')
+  const status = await call(small.dispatch, 'cleanupStatus', { ids: [id] })
+  const failure = status.value.results[0]?.cleanup?.failures?.find(entry => entry.phase === 'path')
+  ok(failure?.reason === 'snapshot-unavailable', `bigfile: reason is snapshot-unavailable (got ${failure?.reason})`)
+  removeSessionFromCorpus(id)
+  rmSync(trackingDir(id), { recursive: true, force: true })
+}
+{
+  // S7: a crash AFTER a first resume must still remove the right session dir —
+  // cleanup.json can hold an already-encoded sessionId, which double-encoding
+  // used to turn into a silent "dir not found"
+  const rawId = 'session-enc~test'
+  const encoded = encodeSegmentForTest(rawId)
+  const cwd = makeSessionDir(rawId, encoded)
+  mkdirSync(trackingDir(rawId), { recursive: true })
+  writeFileSync(join(trackingDir(rawId), 'baseline.json'), `${JSON.stringify({ version: 1, sessionId: encoded, cwd, capturedAt: Date.now(), truncated: false, files: {}, dirs: [] })}\n`)
+  writeFileSync(join(trackingDir(rawId), 'cleanup.json'), `${JSON.stringify({
+    version: 1, sessionId: encoded, state: 'rolling_back', mode: 'full', requestedAt: NOW, attempts: 1,
+    startedAt: Date.now() - 11 * 60 * 1000, results: [], conflicts: [], failures: [],
+  })}\n`)
+  const restarted = boot()
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 600))
+  ok(!existsSync(join(sessionsRoot(), encoded)), 'encid: resume removed the encoded session dir')
+  ok(!existsSync(trackingDir(rawId)), 'encid: journal destroyed after resume')
+  removeSessionFromCorpus(rawId)
+}
+{
+  // decodeSegment round-trips the persistence encoding
+  const manage = await import(new URL('../session-manage.js', import.meta.url).href)
+  ok(manage.decodeSegment(manage.encodeSegment('a/b~c')) === 'a/b~c', 'encid: decodeSegment round-trips encodeSegment')
 }
 
 // --- dispose -----------------------------------------------------------------------

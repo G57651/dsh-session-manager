@@ -130,7 +130,10 @@ export function createBaselineStore(filePath, snapshotStore, logger) {
         onFile: async ({ absolutePath, sha256 }) => {
           // content snapshot for restore; failure keeps the hash-only entry
           try {
-            await snapshotStore.putFile(absolutePath)
+            const stored = await snapshotStore.putFile(absolutePath)
+            if (stored?.oversized === true) {
+              logger?.info?.(`[dsh-session-manager] baseline snapshot skipped (oversized, ${stored.size} bytes): ${absolutePath}`)
+            }
           } catch (error) {
             logger?.warn?.(`[dsh-session-manager] baseline snapshot failed for ${absolutePath}: ${error?.message ?? error}`)
           }

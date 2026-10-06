@@ -35,7 +35,7 @@ export function firstUrl(text) {
   return match === null ? null : match[1] ?? match[0]
 }
 
-export function createDownloadTracker({ logger } = {}) {
+export function createDownloadTracker() {
   let intents = [] // { url, at, toolName }
 
   function pushIntent(url, toolName) {
@@ -89,7 +89,7 @@ export function createDownloadTracker({ logger } = {}) {
   }
 }
 
-export function createProcessTracker({ logger } = {}) {
+export function createProcessTracker() {
   return {
     resourceType: RESOURCE_TYPES.PROCESS,
 

@@ -24,7 +24,7 @@
 
 import { join, resolve } from 'node:path'
 import { readdir, rm, stat, readFile, writeFile, mkdir } from 'node:fs/promises'
-import { encodeSegment } from '../session-manage.js'
+import { encodeSegment, decodeSegment } from '../session-manage.js'
 import {
   ACTIONS, OWNERSHIP, RESOURCE_TYPES, CLEANUP_STATES, RESUMABLE_STATES,
   makeChangeRecord, isInsideRoot, sha256Hex,
@@ -62,11 +62,20 @@ function deriveOwnership(change, { inBaseline }) {
       return OWNERSHIP.SESSION_DELETED // unset of something that existed
     case RESOURCE_TYPES.PROCESS:
       return OWNERSHIP.SESSION_CREATED
-    default: // file / configuration / directory / download
+    default: {
+      // file / configuration / directory / download
       if (change.action === ACTIONS.CREATED || change.action === ACTIONS.DOWNLOADED) return OWNERSHIP.SESSION_CREATED
       if (change.action === ACTIONS.DELETED) return OWNERSHIP.SESSION_DELETED
-      if (change.resourceType === RESOURCE_TYPES.CONFIGURATION) return OWNERSHIP.SESSION_CONFIGURED
-      return OWNERSHIP.SESSION_MODIFIED
+      const configured = change.resourceType === RESOURCE_TYPES.CONFIGURATION
+      // adopted pre-existing file (baseline never captured it): it predates the
+      // session, so a modification is a modify — never a creation
+      if (change.before?.unbaselined === true) return configured ? OWNERSHIP.SESSION_CONFIGURED : OWNERSHIP.SESSION_MODIFIED
+      if (inBaseline) return configured ? OWNERSHIP.SESSION_CONFIGURED : OWNERSHIP.SESSION_MODIFIED
+      // absent from the baseline and not adopted → this session created it;
+      // a later edit of the session's own file is still a creation, not a
+      // modification of pre-existing content
+      return OWNERSHIP.SESSION_CREATED
+    }
   }
 }
 
@@ -122,7 +131,9 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     return {
       maxFiles: clampNumber(config.trackingMaxFiles, 1, 200_000, 5000),
       maxDepth: clampNumber(config.trackingMaxDepth, 0, 64, 12),
-      excludes: Array.isArray(config.trackingExclude) && config.trackingExclude.length > 0 ? config.trackingExclude : DEFAULT_EXCLUDES,
+      excludes: Array.isArray(config.trackingExclude) && config.trackingExclude.length > 0
+        ? [...new Set([...DEFAULT_EXCLUDES, ...config.trackingExclude])] // ADD to the defaults, never replace them
+        : DEFAULT_EXCLUDES,
     }
   }
 
@@ -136,8 +147,8 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
 
   const dirFor = sessionId => join(trackingRoot, encodeSegment(String(sessionId)))
 
-  function storesFor(sessionId) {
-    const dir = dirFor(sessionId)
+  /** Stores rooted at a KNOWN tracking directory (already-encoded — never re-encode). */
+  function storesAtDirectory(dir) {
     const snapshotStore = createSnapshotStore(join(dir, 'snapshots'), { maxFileBytes: snapshotLimit(), logger })
     return {
       dir,
@@ -146,6 +157,10 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
       journal: createChangeJournal(join(dir, 'changes.jsonl'), logger),
       stateStore: createCleanupStateStore(join(dir, 'cleanup.json'), logger),
     }
+  }
+
+  function storesFor(sessionId) {
+    return storesAtDirectory(dirFor(sessionId))
   }
 
   function createEngine(sessionId, stores) {
@@ -564,6 +579,11 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     if ((await hasAnyTracking(sessionId)) === false) {
       return { ok: true, skipped: 'legacy-untracked', state: null, actions: [], conflicts: [], failures: [] }
     }
+    const engine = createEngine(sessionId, storesFor(sessionId))
+    // the cleanup intent lands BEFORE the final diff: a crash inside the diff
+    // leaves a resumable record instead of a deleted-looking session with
+    // intact data and no cleanup state (requirement §七 step 1 "Lock")
+    await engine.requestCleanup(mode)
     let finalDiff = 'ran'
     let idleMs = null
     try {
@@ -573,8 +593,6 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
       finalDiff = 'failed'
       logger?.warn?.(`[dsh-session-manager] final diff ${sessionId} failed: ${error?.message ?? error}`)
     }
-    const engine = createEngine(sessionId, storesFor(sessionId))
-    await engine.requestCleanup(mode)
     const outcome = await engine.rollback()
     return { ok: outcome.ok, state: outcome.state, actions: outcome.actions, conflicts: outcome.conflicts, failures: outcome.failures, finalDiff, idleMs }
   }
@@ -635,15 +653,22 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     const resumed = []
     for (const entry of entries) {
       if (entry.isDirectory() !== true) continue
-      const stores = storesFor(entry.name)
-      const engine = createEngine(entry.name, stores)
-      const state = await engine.loadState()
+      // entry.name is the tracking DIRECTORY name (already encoded): address it
+      // directly — passing it through storesFor would encode it a second time
+      // and silently miss the very files this pass exists to read
+      const stores = storesAtDirectory(join(trackingRoot, entry.name))
+      const state = await stores.stateStore.load()
       if (state === null || RESUMABLE_STATES.has(state.state) === false) continue
       if (lockIsBusy(state)) {
         logger?.info?.(`[dsh-session-manager] cleanup for ${entry.name} is owned by a live process; skipping`)
         continue
       }
-      const decodedSessionId = typeof state.sessionId === 'string' && state.sessionId !== '' ? state.sessionId : entry.name
+      // the tracking dir name IS encodeSegment(rawId) — the canonical source.
+      // Trusting cleanup.json's sessionId instead survives a crash only once:
+      // a previous rollback re-encodes it, and the second resume double-encodes
+      // the lookup into a silent "dir not found" (audited bug).
+      const decodedSessionId = decodeSegment(entry.name)
+      const engine = createEngine(decodedSessionId, stores)
       if (getConfig().autoResume === false) {
         logger?.info?.(`[dsh-session-manager] unfinished cleanup for ${decodedSessionId} (${state.state}); autoResume disabled`)
         continue
@@ -970,6 +995,23 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     }
   }
 
+  /**
+   * One sweep pass for poll deployments: diff every session the host corpus
+   * knows about. Domain logic lives here, not in the RPC glue.
+   */
+  async function sweepKnownSessions() {
+    const query = ctx.get?.('sessionQuery')
+    if (query === undefined || typeof query.listSessions !== 'function') return
+    try {
+      const records = await query.listSessions()
+      for (const record of records ?? []) {
+        const id = String(record?.header?.id ?? '')
+        if (id === '') continue
+        await diffSession(id).catch(() => {})
+      }
+    } catch { /* sweep is best-effort by definition */ }
+  }
+
   /** Cheap tracked-flag for list rows. */
   async function isTracked(sessionId) {
     if (enabled() === false) return false
@@ -1023,6 +1065,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     getCleanupStatus,
     cleanupSession,
     openResource,
+    sweepKnownSessions,
     isTracked,
     cancelPendingCleanup,
     dispose,

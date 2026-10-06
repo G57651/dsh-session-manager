@@ -18,11 +18,6 @@ export function createSnapshotStore(rootDir, { maxFileBytes = 8 * 1024 * 1024, l
   const dirFor = hash => join(rootDir, hash.slice(0, 2), hash)
 
   return {
-    /** @returns {string} absolute path a hash's blob lives at (no I/O). */
-    pathFor(hash) {
-      return dirFor(String(hash))
-    },
-
     /**
      * Store raw content, deduplicated by hash.
      * @param {string|Buffer} content

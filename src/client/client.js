@@ -89,7 +89,7 @@ function createManagerStore() {
       confirmPurgeIds: null,
       sources: null,
       noticeDismissed: false,
-      config: { confirmPurge: true, autoRefresh: true, maxBatchSize: 200, titleFetchLimit: 300 },
+      config: { confirmPurge: true, autoRefresh: true },
       detail: null,
     }),
     actions: {
@@ -144,7 +144,7 @@ function createManagerStore() {
       openConfirmPurge: (draft, ids) => { draft.confirmPurgeIds = ids },
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
       // resource detail modal (0.2.x): one open detail at a time; the modal
-      // owns its app-picker selection, scanned app list and batch selection
+      // owns its batch selection (open actions go through the OS file manager)
       openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false } },
       toggleDetailSelect: (draft, key) => {
         if (draft.detail === null) return
@@ -390,7 +390,6 @@ function displayTitle(row, t) {
 // ---------------------------------------------------------------------------
 
 const ICON_SESSION_MANAGER_REGULAR_STROKE = 1
-const ICON_SESSION_MANAGER_MEDIUM_STROKE = 1.3
 
 function IconSessionManagerOutlineArtwork({ size = 16, className, strokeWidth }) {
   return h('svg', {
@@ -412,11 +411,6 @@ function IconSessionManagerOutlineArtwork({ size = 16, className, strokeWidth })
 /** One-pixel "bubble list" artwork (sidebar default). */
 function IconSessionManagerOutlineRegular(props) {
   return h(IconSessionManagerOutlineArtwork, { ...props, strokeWidth: ICON_SESSION_MANAGER_REGULAR_STROKE })
-}
-
-/** 1.3px "bubble list" artwork for dense contexts. */
-function IconSessionManagerOutlineMedium(props) {
-  return h(IconSessionManagerOutlineArtwork, { ...props, strokeWidth: ICON_SESSION_MANAGER_MEDIUM_STROKE })
 }
 
 function PanelIcon(props) {
@@ -469,7 +463,7 @@ function Row({ row, view, t, selectMode, selected, actions, controller, config }
       ),
       h('div', { className: 'dsm-rowMeta' },
         row.deleted === true
-          ? formatRelativeTime(row.deletedAt, t)
+          ? [formatRelativeTime(row.deletedAt, t), typeof row.cwd === 'string' && row.cwd !== '' ? row.cwd : null].filter(Boolean).join(' · ')
           : rowMetaText(row, t)),
     ),
     !selectMode && h('div', { className: 'dsm-rowActions' }, quickActions),
@@ -548,7 +542,7 @@ function PurgeConfirmModal({ ids, rows, actions, controller, t }) {
 // baseline and journal-derived resources by type with ownership/status pills.
 // ---------------------------------------------------------------------------
 
-const RES_GROUP_ORDER = ['file', 'configuration', 'download', 'directory', 'dependency', 'environment_variable', 'process']
+const RES_GROUP_ORDER = ['file', 'configuration', 'download', 'directory', 'dependency', 'environment_variable', 'process', 'other']
 const RES_GROUP_KEY = {
   file: 'res.group.file',
   configuration: 'res.group.configuration',
@@ -557,6 +551,7 @@ const RES_GROUP_KEY = {
   dependency: 'res.group.dependency',
   environment_variable: 'res.group.env',
   process: 'res.group.process',
+  other: 'res.group.other',
 }
 const RES_OWNERSHIP_KEY = {
   session_created: 'res.own.created',
@@ -611,7 +606,7 @@ function ResourcesModal({ detail, actions, controller, t }) {
   const resources = data?.resources ?? []
   const groups = new Map()
   for (const row of resources) {
-    const type = RES_GROUP_ORDER.includes(row.resourceType) ? row.resourceType : 'file'
+    const type = RES_GROUP_ORDER.includes(row.resourceType) ? row.resourceType : 'other'
     if (groups.has(type) === false) groups.set(type, [])
     groups.get(type).push(row)
   }
@@ -646,7 +641,7 @@ function ResourcesModal({ detail, actions, controller, t }) {
         data.tracked === true && resources.length === 0 && h('p', { key: 'empty', className: 'dsm-resHint' }, t('res.empty')),
 
         // open toolbar: everything opens in the OS file manager (the only method)
-        tracked && openableRows.length > 0 && h('div', { key: 'toolbar', className: 'dsm-resToolbar' },
+        tracked && h('div', { key: 'toolbar', className: 'dsm-resToolbar' },
           h('span', { key: 'hint', className: 'dsm-resToolbarHint' }, t('res.fileManagerHint')),
           h(Button, { key: 'ws', variant: 'ghost', size: 'sm', disabled: detail.busy === true, onClick: () => void controller.openWorkspace() }, t('res.openWorkspace')),
           h(Button, {
@@ -834,7 +829,11 @@ function apply(ctx) {
     if (result?.ok === true && result.value !== null && typeof result.value === 'object') {
       instance.actions.setConfig(result.value)
       if (result.value.autoRefresh === true) controller.subscribeEvents()
+      return
     }
+    // the schema default is autoRefresh: true — a failed config call must not
+    // silently turn event-driven refresh off
+    controller.subscribeEvents()
   })()
 
   ctx.slots.inject('main', function* () {

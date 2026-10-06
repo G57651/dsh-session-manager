@@ -25,8 +25,8 @@ export function createDefaultTrackers({ cwd, state, baselineDirs = [], sessionSt
   return {
     file: createFileTracker({ cwd, state, baselineDirs, sessionStartedAt, snapshotStore, scan, logger }),
     dependency: createDependencyTracker({ cwd, baselineInstalled: baselineDeps, logger }),
-    env: createEnvTracker({ logger }),
-    download: createDownloadTracker({ logger }),
-    process: createProcessTracker({ logger }),
+    env: createEnvTracker(),
+    download: createDownloadTracker(),
+    process: createProcessTracker(),
   }
 }

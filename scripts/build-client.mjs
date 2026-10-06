@@ -145,7 +145,7 @@ ${indent(client.body)}
 // panel tree crashes (observed as a black panel in the real app, v0.2.1).
 {
   const initMatch = /init: \(\) => \(\{([\s\S]*?)\}\),\n    actions:/.exec(client.body)
-  if (initMatch === null) fail('client.js: store init() literal not found')
+  if (initMatch === null) fail("client.js: store init() literal not found — if the store shape changed, update this check (it guards useStore selectors against missing init fields)")
   const declared = new Set([...initMatch[1].matchAll(/^\s*([A-Za-z_$][\w$]*):/gm)].map(match => match[1]))
   const selectors = [...client.body.matchAll(/useStore\(s => s\.([A-Za-z_$][\w$]*)\)/g)].map(match => match[1])
   const missing = [...new Set(selectors)].filter(name => declared.has(name) === false)

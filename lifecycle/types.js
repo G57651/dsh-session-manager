@@ -196,7 +196,7 @@ export function isInsideRoot(targetPath, rootPath) {
  */
 export function makeChangeRecord({ seq, sessionId, resourceType, action, resource, before, after, ownership, metadata }) {
   return {
-    id: `chg_${seq}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `chg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     sessionId,
     timestamp: Date.now(),
     resourceType,

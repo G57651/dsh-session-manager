@@ -286,13 +286,13 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
       actions.push({ phase: 'workspace', outcome: 'skipped', reason: 'workspace-missing', cwd })
       // workspace gone → every path resource is gone with it; env/deps of that
       // workspace too. Still process env (host-process scope survives).
-      await runEnvPhase(records, actions, conflicts, failures)
+      runEnvPhase(records, actions)
       return { actions, conflicts, failures }
     }
 
     await runDepPhase(cwd, records, baseline, actions, conflicts, failures)
     const preserved = await runPathPhase(cwd, records, baseline, actions, conflicts, failures)
-    await runEnvPhase(records, actions, conflicts, failures)
+    runEnvPhase(records, actions)
     runProcessPhase(records, actions)
     await runVerifyPhase(cwd, records, baseline, actions, conflicts, failures, preserved)
     return { actions, conflicts, failures }
@@ -542,9 +542,24 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
         actions.push({ phase: 'path', path, outcome: 'noop', reason: 'already-removed' })
         continue
       }
-      const lastAfterHash = expectedAfter?.sha256 ?? null
+      if (expectedAfter === null) {
+        // the session created this path and then deleted it; anything present
+        // now was recreated by somebody else — never silently remove it
+        if (recordConflict({ phase: 'path', path, expected: 'missing', current: currentHash === null ? 'present' : `sha256:${currentHash}`, reason: 'externally-recreated-after-session-delete' })) {
+          removes.push({ path, isDirectory: last.record.resourceType === 'directory' })
+        }
+        continue
+      }
+      const lastAfterHash = expectedAfter.sha256 ?? null
       if (lastAfterHash !== null && currentHash !== lastAfterHash) {
         if (recordConflict({ phase: 'path', path, expected: `sha256:${lastAfterHash}`, current: `sha256:${currentHash}`, reason: 'externally-modified-after-session' })) {
+          removes.push({ path, isDirectory: last.record.resourceType === 'directory' })
+        }
+        continue
+      }
+      if (lastAfterHash === null && Number.isFinite(expectedAfter.size) && current.size !== expectedAfter.size) {
+        // oversize file without a hash: size agreement is the only signal left
+        if (recordConflict({ phase: 'path', path, expected: `size:${expectedAfter.size}`, current: `size:${current.size}`, reason: 'externally-modified-after-session' })) {
           removes.push({ path, isDirectory: last.record.resourceType === 'directory' })
         }
         continue
@@ -579,7 +594,11 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
 
   async function restoreBaselineContent(cwd, relativePath, baselineEntry) {
     const content = await snapshotStore.get(baselineEntry.sha256)
-    if (content === null) return { ok: false, reason: 'snapshot-missing' }
+    if (content === null) {
+      // the blob was never stored (content exceeded the snapshot cap): the
+      // documented limitation, not a lookup failure
+      return { ok: false, reason: 'snapshot-unavailable' }
+    }
     const absolute = join(cwd, relativePath)
     if (isInsideRoot(absolute, cwd) === false) return { ok: false, reason: 'unsafe-path' }
     try {
@@ -628,7 +647,14 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     return entry.redacted === true ? entry.hash : sha256Hex(String(entry.value))
   }
 
-  function runEnvPhase(records, actions, conflicts, failures) {
+  /**
+   * Environment variables are AUDIT-ONLY. The plugin never writes the host
+   * process env (the session's child shells died with their own, so a parsed
+   * export never reached the host), which means cleanup must never write it
+   * either: whatever the env holds now is somebody else's value, and nothing
+   * here can clobber it — the phase only classifies and reports.
+   */
+  function runEnvPhase(records, actions) {
     const envRecords = records.filter(record => record.resourceType === 'environment_variable' && typeof record.resource?.name === 'string')
     if (envRecords.length === 0) return
     const byName = new Map()
@@ -640,50 +666,21 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     for (const [name, touches] of byName) {
       const first = touches[0]
       const last = touches[touches.length - 1]
-      const desiredAbsent = first.before === null
       const currentFingerprint = name in env ? sha256Hex(String(env[name])) : null
-      const expectedFingerprint = envValueFingerprint(last.after)
+      const afterFingerprint = envValueFingerprint(last.after)
       const originalFingerprint = envValueFingerprint(first.before)
-
-      if (desiredAbsent) {
-        if (currentFingerprint === null) {
-          actions.push({ phase: 'env', name, outcome: 'noop', reason: 'already-absent' })
-          continue
-        }
-        // unset is only safe while the env still holds exactly what the
-        // session last recorded: the plugin never writes the host env, so any
-        // deviation is somebody else's value and must not be deleted (same
-        // doctrine as the file-side conflict checks)
-        if (expectedFingerprint === null || currentFingerprint !== expectedFingerprint) {
-          conflicts.push({
-            phase: 'env', name,
-            expected: expectedFingerprint === null ? 'absent' : `fingerprint:${expectedFingerprint}`,
-            current: `fingerprint:${currentFingerprint}`,
-            reason: 'externally-modified-after-session',
-          })
-          continue
-        }
-        delete env[name]
-        actions.push({ phase: 'env', name, outcome: 'unset' })
-        continue
-      }
-      // desired: the pre-session value. Secret → plaintext unknowable, but
-      // the fingerprint still tells "already back to the original" apart
-      // from "someone changed it after the session".
       if (currentFingerprint === originalFingerprint) {
         actions.push({ phase: 'env', name, outcome: 'noop', reason: 'already-at-original-value' })
         continue
       }
-      if (first.before.redacted === true) {
-        conflicts.push({ phase: 'env', name, expected: `fingerprint:${originalFingerprint}`, current: `fingerprint:${currentFingerprint}`, reason: 'secret-unrecoverable: the pre-session value was redacted and cannot be written back' })
+      if (currentFingerprint === afterFingerprint) {
+        actions.push({ phase: 'env', name, outcome: 'noop', reason: 'host-env-untouched' })
         continue
       }
-      if (expectedFingerprint !== null && currentFingerprint !== expectedFingerprint) {
-        conflicts.push({ phase: 'env', name, expected: `fingerprint:${expectedFingerprint}`, current: currentFingerprint === null ? 'absent' : `fingerprint:${currentFingerprint}`, reason: 'externally-modified-after-session' })
-        continue
-      }
-      env[name] = first.before.value
-      actions.push({ phase: 'env', name, outcome: 'restored' })
+      actions.push({
+        phase: 'env', name, outcome: 'skipped', reason: 'host-env-untouched',
+        current: currentFingerprint === null ? 'absent' : `fingerprint:${currentFingerprint}`,
+      })
     }
   }
 

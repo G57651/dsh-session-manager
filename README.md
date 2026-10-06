@@ -242,6 +242,21 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 
 ## 变更记录
 
+### 0.3.6（技能化双轴审计：7 处隐形 bug 修复 + 死代码清理）
+
+用 `code-review` 技能（mattpocock/skills，双轴隔离并行审计：Standards 规范/坏味道 × Spec 需求符合度）与 `diagnosing-bugs` 技能（红灯反馈循环先行）对全部约 7300 行代码做了一轮完整审计，按纪律先写红灯用例再修复：
+
+- **环境清理不再写宿主 env**：env 阶段从「按指纹匹配时执行 unset/恢复」改为**纯报告**——插件从不改写宿主环境，清理自然也不写；所有 env 记录只做审计与分类（`already-at-original-value` / `host-env-untouched`）。
+- **remove 分支的冲突检查补齐**：会话「创建后又删除」的路径若被外部重建，旧代码因 after 为空而跳过校验、静默删除；现在判 `externally-recreated-after-session-delete` 冲突并保留；无哈希的大文件增加 size 兜底校验。
+- **恢复流程的双重编码修复**（真 bug 两层）：清理目录名是 `encodeSegment(原始 id)`，resume 用已编码目录名再喂给 `storesFor` 会二次编码——导致 cleanup.json 都读不到、静默跳过（第一层）；且 rollback 会把编码名写回 cleanup.json，第二次 resume 双重编码定位失败、销毁 Journal 却留下会话目录（第二层）。现在以目录名为主源（新增 `decodeSegment`）直接按目录寻址。
+- **`trackingExclude` 语义修正**：自定义排除项原会**替换**默认排除（node_modules/.git 等失守），现在与默认表**合并**。
+- **所有权标签修正**：会话新建的文件再次被改，标签不再错报 `session_modified`；收养的既有文件始终不报 `session_created`（标签跟随“会话开始前是否存在”）。
+- **大文件快照缺失的报告**：未存快照的恢复失败从误导性的 `snapshot-missing` 改为文档一致的 `snapshot-unavailable`；基线捕获对超大文件跳过快照时给出日志。
+- **清理意图先于最终 diff 落盘**：crashes 在 diff 窗口内也保持可续跑（状态机 step 1 前置）。
+- **client 修复**：未知资源类型归入「其他」分组且不可打开（原来冒充文件并可点开）；仅含环境变量的会话仍显示工具栏（打开工作区可用）；已删除视图行恢复显示工作目录；config 调用失败不再静默关闭自动刷新。
+- **死代码清理**：`safeList`、`snapshots.pathFor`、`IconSessionManagerOutlineMedium`、死 locale 键（loading.text/error.generic）、死 CSS（.dsm-tabCount）、测试脚本死片段、trackers 未用的 logger 参数；`makeChangeRecord` 的 id 不再内嵌恒为 0 的 seq。`index.js` 的 archive/unarchive 端点与 RPC 回退分支去重，轮询扫描移入 manager 域层。
+- 测试：`smoke-lifecycle.mjs` 增至 **214 项断言**（新增 6 组审计回归用例），连跑三轮全绿；真机复验：驱动 29/29、agent 回合 8/8、崩溃恢复、截断场景 5/5 全部通过。
+
 ### 0.3.5（代码审计：4 处隐形 bug 修复 + 死代码清理）
 
 - **审计并修复的隐形 bug**（均补了回归用例）：

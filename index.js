@@ -67,6 +67,7 @@ export const CHANNEL = '/dsh-session-manager'
  * @property {boolean} autoCleanup Run resource rollback on delete/purge (tracking must be on).
  * @property {boolean} autoResume Resume unfinished cleanups after a restart.
  * @property {number} trackingPollMs Periodic workspace diff; 0 disables (event-driven + final diff only).
+ * @property {number} trackingIdleWindowMs Final-diff suspect threshold: records captured after this much session idle are preserved, not rolled back.
  * @property {number} trackingMaxFiles Baseline/diff walk cap per session workspace.
  * @property {number} trackingMaxDepth Baseline/diff depth cap per session workspace.
  * @property {number} trackingMaxSnapshotBytes Per-file before-content snapshot cap.
@@ -396,23 +397,22 @@ export function apply(ctx, config) {
       }, Math.max(1000, interval))
       if (typeof pollTimer.unref === 'function') pollTimer.unref()
     }
-    async function sweepAllSessions() {
-      const query = ctx.get('sessionQuery')
-      if (query === undefined || typeof query.listSessions !== 'function') return
-      try {
-        const records = await query.listSessions()
-        for (const record of records ?? []) {
-          const id = String(record?.header?.id)
-          if (id === '') continue
-          await resourceManager.diffSession(id).catch(() => {})
-        }
-      } catch { /* sweep is best-effort by definition */ }
-    }
+    const sweepAllSessions = () => resourceManager.sweepKnownSessions()
     arm()
     return () => {
       if (pollTimer !== undefined) clearInterval(pollTimer)
     }
   }, 'dsh-session-manager: tracking poll (when configured)')
+
+  // archive and unarchive differ only in which domain call they make
+  const archiveStateEndpoint = (action) => ({
+    audit: true,
+    handle: payload => withBatch(config, payload, async (ids) => {
+      const outcome = action === 'archive' ? await archiveSessions(ctx, ids, logger) : await unarchiveSessions(ctx, ids, logger)
+      if (outcome.unavailable) return fail('workspace-unavailable', 'the workspace registry service is not available')
+      return { ok: true, value: { results: outcome.results, archivedSessionIds: outcome.archivedSessionIds } }
+    }, logger),
+  })
 
   const endpoints = {
     list: {
@@ -436,22 +436,8 @@ export function apply(ctx, config) {
         }
       },
     },
-    archive: {
-      audit: true,
-      handle: payload => withBatch(config, payload, async (ids) => {
-        const outcome = await archiveSessions(ctx, ids, logger)
-        if (outcome.unavailable) return fail('workspace-unavailable', 'the workspace registry service is not available')
-        return { ok: true, value: { results: outcome.results, archivedSessionIds: outcome.archivedSessionIds } }
-      }, logger),
-    },
-    unarchive: {
-      audit: true,
-      handle: payload => withBatch(config, payload, async (ids) => {
-        const outcome = await unarchiveSessions(ctx, ids, logger)
-        if (outcome.unavailable) return fail('workspace-unavailable', 'the workspace registry service is not available')
-        return { ok: true, value: { results: outcome.results, archivedSessionIds: outcome.archivedSessionIds } }
-      }, logger),
-    },
+    archive: archiveStateEndpoint('archive'),
+    unarchive: archiveStateEndpoint('unarchive'),
     delete: {
       audit: true,
       handle: payload => withBatch(config, payload, async (ids) => {
@@ -566,15 +552,20 @@ export function apply(ctx, config) {
   // rc.1 contract: `handle(channel, handler)` — two arguments
   // (packages/client/connection/src/rpc.ts:166-190). The previous third
   // `{ authority: 'loopback' }` argument was silently ignored by the host.
-  const rpc = ctx.connection?.rpc
-  if (rpc === undefined || typeof rpc.handle !== 'function') {
+  // one degradation path for both "no rpc seam" and "rpc handle threw"
+  const fallbackToDirectRoute = (reason) => {
     const webServer = ctx.get('webServer')
     if (webServer !== undefined) {
-      logger?.warn?.('[dsh-session-manager] connection.rpc.handle is unavailable; falling back to a direct webServer route')
+      logger?.warn?.(`[dsh-session-manager] ${reason}; falling back to a direct webServer route`)
       registerDirectRpcWebRoute(ctx, webServer, CHANNEL, dispatch, logger)
     } else {
-      logger?.warn?.('[dsh-session-manager] connection.rpc.handle is unavailable and no webServer seam is available')
+      logger?.warn?.(`[dsh-session-manager] ${reason} and no webServer seam is available`)
     }
+  }
+
+  const rpc = ctx.connection?.rpc
+  if (rpc === undefined || typeof rpc.handle !== 'function') {
+    fallbackToDirectRoute('connection.rpc.handle is unavailable')
     return
   }
   try {
@@ -584,13 +575,7 @@ export function apply(ctx, config) {
     }
     logger?.info?.(`[dsh-session-manager] serving ${CHANNEL}`)
   } catch (error) {
-    const webServer = ctx.get('webServer')
-    if (webServer !== undefined) {
-      logger?.warn?.(`[dsh-session-manager] connection rpc handle failed (${error?.message ?? error}); falling back to a direct webServer route`)
-      registerDirectRpcWebRoute(ctx, webServer, CHANNEL, dispatch, logger)
-    } else {
-      logger?.warn?.(`[dsh-session-manager] connection rpc handle failed and no webServer seam available: ${error?.message ?? error}`)
-    }
+    fallbackToDirectRoute(`connection rpc handle failed (${error?.message ?? error})`)
   }
 
   ctx.effect(() => async () => {

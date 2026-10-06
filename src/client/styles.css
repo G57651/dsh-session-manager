@@ -47,10 +47,6 @@
   width: min(460px, 100%);
 }
 
-.dsm-tabCount {
-  opacity: 0.65;
-}
-
 .dsm-list {
   display: flex;
   flex: 1 1 auto;

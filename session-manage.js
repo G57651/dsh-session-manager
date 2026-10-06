@@ -41,15 +41,6 @@ async function probeService(ctx, serviceName, call, logger) {
   }
 }
 
-/**
- * Same probe, downgraded to "value or undefined" for call sites that only need
- * the value.
- */
-async function safeList(ctx, serviceName, call, logger) {
-  const probe = await probeService(ctx, serviceName, call, logger)
-  return probe.ok ? probe.value : undefined
-}
-
 // ---------------------------------------------------------------------------
 // Trash manifest — $DSH_HOME/dsh-session-manager-deleted.json
 // ---------------------------------------------------------------------------
@@ -298,6 +289,16 @@ export function encodeSegment(input) {
       : '~' + text.charCodeAt(index).toString(16).toUpperCase().padStart(4, '0')
   }
   return out
+}
+
+/**
+ * Inverse of `encodeSegment`: each `~XXXX` group becomes the code unit it
+ * escaped. Tracking directories are named with the encoded id, so the raw id
+ * is always recoverable from the directory name — resume uses that instead of
+ * trusting a possibly re-encoded `sessionId` inside cleanup.json.
+ */
+export function decodeSegment(input) {
+  return String(input).replace(/~([0-9A-Fa-f]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
 }
 
 /**

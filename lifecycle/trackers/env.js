@@ -96,7 +96,7 @@ export function parseEnvCommand(command) {
  *   scope: 'host-process')
  * @param {object} [opts.logger]
  */
-export function createEnvTracker({ env = process.env, logger } = {}) {
+export function createEnvTracker({ env = process.env } = {}) {
   return {
     resourceType: RESOURCE_TYPES.ENVIRONMENT_VARIABLE,
 
