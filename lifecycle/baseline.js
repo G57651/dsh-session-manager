@@ -170,9 +170,6 @@ export function createBaselineStore(filePath, snapshotStore, logger) {
   }
 }
 
-/** Baseline basename used in warnings. */
-export const BASELINE_FILE_NAME = 'baseline.json'
-
 /**
  * Baseline state as a Map for the diff engine.
  * @param {object} baseline

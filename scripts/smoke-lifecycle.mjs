@@ -21,7 +21,7 @@
 //
 // Run: node scripts/smoke-lifecycle.mjs
 
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -377,11 +377,13 @@ const dispatch = app.dispatch
 
   // modifying an adopted pre-existing file must NOT make it removable
   writeFileSync(join(cwd, 'old-a.txt'), 'old-a-modified')
+  // a permission-only change on another adopted file must not make it removable either
+  chmodSync(join(cwd, 'old-b.txt'), 0o600)
   await call(restarted.dispatch, 'track', { ids: [id] })
   const deleted = await call(restarted.dispatch, 'delete', { ids: [id] })
   ok(deleted.value.results[0]?.cleanup?.state === 'rollback_verified', `unbaselined: cleanup verified (got ${JSON.stringify(deleted.value.results[0]?.cleanup)})`)
   ok(existsSync(join(cwd, 'old-a.txt')) && readFileSync(join(cwd, 'old-a.txt'), 'utf8') === 'old-a-modified', `unbaselined: pre-existing modified file PRESERVED [exists=${existsSync(join(cwd, 'old-a.txt'))} content=${existsSync(join(cwd, 'old-a.txt')) ? JSON.stringify(readFileSync(join(cwd, 'old-a.txt'), 'utf8')) : 'n/a'}]`)
-  ok(existsSync(join(cwd, 'old-b.txt')), 'unbaselined: untouched pre-existing file preserved')
+  ok(existsSync(join(cwd, 'old-b.txt')), 'unbaselined: pre-existing file with permission-only change preserved')
   ok(!existsSync(join(cwd, 'fresh.txt')), 'unbaselined: session-created file still removed')
   removeSessionFromCorpus(id)
 }
@@ -542,6 +544,39 @@ const dispatch = app.dispatch
 // force boot: a plugin instance configured with conflictMode 'force'
 function forceBoot() {
   return bootWith({ conflictMode: 'force', autoResume: false })
+}
+
+// --- env external changes are preserved, never silently undone ------------------
+{
+  // case8a: session-created var that somebody else set afterwards
+  const id = 'session-env-ext'
+  makeSession(id)
+  delete process.env.DSM_EXT_FOO
+  await call(dispatch, 'track', { ids: [id] })
+  await app.toolCall(id, 'bash', { command: 'export DSM_EXT_FOO=123' })
+  ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 1), 'env-ext: mutation journaled')
+  process.env.DSM_EXT_FOO = 'externally-set' // the plugin never applied it; this is someone else's value
+  const result = await call(dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.cleanup?.state === 'rollback_failed', `env-ext: conflict instead of blind unset (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
+  ok(process.env.DSM_EXT_FOO === 'externally-set', 'env-ext: externally-set value NOT deleted')
+  const status = await call(dispatch, 'cleanupStatus', { ids: [id] })
+  ok(status.value.results[0]?.cleanup?.conflicts?.some(conflict => conflict.phase === 'env' && conflict.name === 'DSM_EXT_FOO' && conflict.reason === 'externally-modified-after-session'), 'env-ext: conflict recorded with reason')
+  delete process.env.DSM_EXT_FOO
+  removeSessionFromCorpus(id)
+
+  // case8b: pre-existing var the session touched, then somebody unset it
+  const id2 = 'session-env-ext2'
+  makeSession(id2)
+  process.env.DSM_EXT_BAR = 'old'
+  await call(dispatch, 'track', { ids: [id2] })
+  await app.toolCall(id2, 'bash', { command: 'export DSM_EXT_BAR=new' })
+  ok(await waitFor(async () => (await peek('changes', { id: id2 })).value.total >= 1), 'env-ext: modify journaled')
+  delete process.env.DSM_EXT_BAR // external unset
+  const result2 = await call(dispatch, 'delete', { ids: [id2] })
+  ok(result2.value.results[0]?.cleanup?.state === 'rollback_failed', `env-ext: external unset conflicts, not resurrected (got ${JSON.stringify(result2.value.results[0]?.cleanup)})`)
+  ok(!('DSM_EXT_BAR' in process.env), 'env-ext: externally-unset variable NOT resurrected')
+  delete process.env.DSM_EXT_BAR
+  removeSessionFromCorpus(id2)
 }
 
 // --- downloads ------------------------------------------------------------------

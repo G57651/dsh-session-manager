@@ -10,7 +10,7 @@
 // and the journal marks it `oversized` — cleanup then reports
 // `snapshot-unavailable` for it instead of pretending to be able to restore.
 
-import { mkdir, writeFile, readFile, stat, rm, rename } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, stat, rename } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { sha256Hex } from './types.js'
 
@@ -70,16 +70,5 @@ export function createSnapshotStore(rootDir, { maxFileBytes = 8 * 1024 * 1024, l
       const stored = await this.put(content)
       return { ...stored, mode: info.mode }
     },
-
-    /** Only meaningful before the journal is destroyed; part of teardown. */
-    async destroyAll() {
-      await rm(rootDir, { recursive: true, force: true })
-    },
-
-    get limits() {
-      return { maxFileBytes }
-    },
-
-    logger,
   }
 }

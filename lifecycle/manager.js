@@ -51,7 +51,7 @@ const PATH_RESOURCE_TYPES = new Set(['file', 'configuration', 'directory', 'down
  * ledger independently derives the net effect per path from the same
  * baseline membership, so labels and rollback behavior can never disagree.
  */
-export function deriveOwnership(change, { inBaseline }) {
+function deriveOwnership(change, { inBaseline }) {
   switch (change.resourceType) {
     case RESOURCE_TYPES.DEPENDENCY:
       if (change.action === ACTIONS.INSTALLED) return OWNERSHIP.SESSION_INSTALLED
@@ -395,7 +395,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
    * can get (wired to the host `session/created` event).
    */
   async function observeSessionCreated(sessionId) {
-    if (typeof sessionId !== 'string' || sessionId === '' ) return
+    if (typeof sessionId !== 'string' || sessionId === '') return
     try {
       if (enabled() === false) return
       noteActivity(sessionId)
@@ -655,8 +655,8 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
             resumed.push({ sessionId: decodedSessionId, state: state.state, resumed: true, note: 'rollback-only-terminal' })
             continue
           }
-          const removed = await removeSessionDirForResume(decodedSessionId)
           await beforeSessionDirRemoval(decodedSessionId)
+          const removed = await removeSessionDirForResume(decodedSessionId)
           const finished = await afterSessionDirRemoved(decodedSessionId)
           resumed.push({ sessionId: decodedSessionId, state: finished.removed ? 'complete' : finished.reason, resumed: true, sessionDirRemoved: removed })
           continue
@@ -672,8 +672,8 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
           resumed.push({ sessionId: decodedSessionId, state: outcome.state, resumed: true })
           continue
         }
-        const removed = await removeSessionDirForResume(decodedSessionId)
         await beforeSessionDirRemoval(decodedSessionId)
+        const removed = await removeSessionDirForResume(decodedSessionId)
         const finished = await afterSessionDirRemoved(decodedSessionId)
         resumed.push({ sessionId: decodedSessionId, state: finished.removed ? 'complete' : finished.reason, resumed: true, sessionDirRemoved: removed })
       } catch (error) {
@@ -1013,12 +1013,10 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     ensureBaseline,
     observeEvent,
     observeSessionCreated,
-    baselineKnownSessions,
     diffSession,
     prepareRemoval,
     beforeSessionDirRemoval,
     afterSessionDirRemoved,
-    resumePending,
     bootstrap,
     getChanges,
     getResources,
@@ -1028,6 +1026,5 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     isTracked,
     cancelPendingCleanup,
     dispose,
-    trackingRoot,
   }
 }

@@ -335,7 +335,7 @@ export function apply(ctx, config) {
   const manifest = createManifestStore(join(dshHome, 'dsh-session-manager-deleted.json'), logger)
   const titleCache = createTitleCache(join(dshHome, 'dsh-session-manager-titles.json'), logger)
   const purgeTracker = createPurgeTracker()
-  const opener = createOpener({ logger })
+  const opener = createOpener()
   const resourceManager = createSessionResourceManager({
     dshHome,
     ctx,

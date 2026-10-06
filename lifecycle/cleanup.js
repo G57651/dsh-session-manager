@@ -291,10 +291,10 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     }
 
     await runDepPhase(cwd, records, baseline, actions, conflicts, failures)
-    await runPathPhase(cwd, records, baseline, actions, conflicts, failures)
+    const preserved = await runPathPhase(cwd, records, baseline, actions, conflicts, failures)
     await runEnvPhase(records, actions, conflicts, failures)
     runProcessPhase(records, actions)
-    await runVerifyPhase(cwd, records, baseline, actions, conflicts, failures)
+    await runVerifyPhase(cwd, records, baseline, actions, conflicts, failures, preserved)
     return { actions, conflicts, failures }
   }
 
@@ -429,9 +429,15 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     }
   }
 
+  /**
+   * @returns {Promise<Set<string>>} paths deliberately preserved (suspect /
+   * unbaselined / non-empty directory): the verify phase must not flag a
+   * conservative skip as a failure.
+   */
   async function runPathPhase(cwd, records, baseline, actions, conflicts, failures) {
+    const preserved = new Set()
     const ledger = buildPathLedger(records, baseline)
-    if (ledger.size === 0) return
+    if (ledger.size === 0) return preserved
 
     const restores = []
     const removes = []
@@ -461,6 +467,7 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
       // removed nor restored. Preserve the current state and report.
       if (entry.touches[0]?.record?.before?.unbaselined === true) {
         actions.push({ phase: 'path', path, outcome: 'skipped', reason: 'preexisting-unbaselined' })
+        preserved.add(path)
         continue
       }
 
@@ -477,6 +484,7 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
         } else {
           // safe mode: a deliberate preserve, not a failure — report and move on
           actions.push({ phase: 'path', path, outcome: 'skipped', reason: 'external-suspect', idleMs: last.record.metadata?.idleMs })
+          preserved.add(path)
           continue
         }
       }
@@ -560,11 +568,13 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
         // a session-created directory still holding content: conservative
         // skip, reported but not a hard failure
         actions.push({ phase: 'path', path: task.path, outcome: 'skipped', reason: 'not-empty' })
+        preserved.add(task.path)
         continue
       }
       actions.push({ phase: 'path', path: task.path, outcome: outcome.ok ? (task.isDirectory ? 'rmdir' : 'removed') : 'failed', reason: outcome.reason })
       if (outcome.ok !== true) failures.push({ phase: 'path', path: task.path, reason: outcome.reason })
     }
+    return preserved
   }
 
   async function restoreBaselineContent(cwd, relativePath, baselineEntry) {
@@ -598,6 +608,8 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
       // with ENOTEMPTY — that is the conservative outcome we want for
       // session-created directories
       if (isDirectory && error?.code === 'ENOTEMPTY') return { ok: true, reason: 'not-empty' }
+      // vanished between the state check and the removal: absent is the goal
+      if (error?.code === 'ENOENT') return { ok: true, reason: 'already-removed' }
       logger?.warn?.(`[dsh-session-manager] remove ${relativePath} failed: ${error?.message ?? error}`)
       return { ok: false, reason: error?.code ?? 'remove-failed' }
     }
@@ -638,7 +650,19 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
           actions.push({ phase: 'env', name, outcome: 'noop', reason: 'already-absent' })
           continue
         }
-        // unset needs no value knowledge — safe even for secrets
+        // unset is only safe while the env still holds exactly what the
+        // session last recorded: the plugin never writes the host env, so any
+        // deviation is somebody else's value and must not be deleted (same
+        // doctrine as the file-side conflict checks)
+        if (expectedFingerprint === null || currentFingerprint !== expectedFingerprint) {
+          conflicts.push({
+            phase: 'env', name,
+            expected: expectedFingerprint === null ? 'absent' : `fingerprint:${expectedFingerprint}`,
+            current: `fingerprint:${currentFingerprint}`,
+            reason: 'externally-modified-after-session',
+          })
+          continue
+        }
         delete env[name]
         actions.push({ phase: 'env', name, outcome: 'unset' })
         continue
@@ -654,8 +678,8 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
         conflicts.push({ phase: 'env', name, expected: `fingerprint:${originalFingerprint}`, current: `fingerprint:${currentFingerprint}`, reason: 'secret-unrecoverable: the pre-session value was redacted and cannot be written back' })
         continue
       }
-      if (expectedFingerprint !== null && currentFingerprint !== null && currentFingerprint !== expectedFingerprint) {
-        conflicts.push({ phase: 'env', name, expected: `fingerprint:${expectedFingerprint}`, current: `fingerprint:${currentFingerprint}`, reason: 'externally-modified-after-session' })
+      if (expectedFingerprint !== null && currentFingerprint !== expectedFingerprint) {
+        conflicts.push({ phase: 'env', name, expected: `fingerprint:${expectedFingerprint}`, current: currentFingerprint === null ? 'absent' : `fingerprint:${currentFingerprint}`, reason: 'externally-modified-after-session' })
         continue
       }
       env[name] = first.before.value
@@ -670,16 +694,13 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
   // be gone. Adds verify rows to the report; a mismatch here is a hard failure
   // so the state lands on rollback_failed and the journal survives for retry.
 
-  async function runVerifyPhase(cwd, records, baseline, actions, conflicts, failures) {
+  async function runVerifyPhase(cwd, records, baseline, actions, conflicts, failures, preserved = new Set()) {
     const ledger = buildPathLedger(records, baseline)
     for (const [path, entry] of ledger) {
-      const last = entry.touches[entry.touches.length - 1]
-      if (entry.touches[0]?.record?.before?.unbaselined === true) {
-        actions.push({ phase: 'verify', path, outcome: 'skipped', reason: 'preexisting-unbaselined' })
-        continue
-      }
-      if (isSuspectFinalDiff(last.record)) {
-        actions.push({ phase: 'verify', path, outcome: 'skipped', reason: 'external-suspect' })
+      if (preserved.has(path) === true) {
+        // a conservative preserve decided in the path phase is the outcome,
+        // not a failure to verify away
+        actions.push({ phase: 'verify', path, outcome: 'skipped', reason: 'preserved' })
         continue
       }
       if (entry.inBaseline === true) {

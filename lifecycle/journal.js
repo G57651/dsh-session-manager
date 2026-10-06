@@ -9,7 +9,7 @@
 // journal (0-based per file) so replay order is unambiguous even when two
 // changes share a millisecond timestamp.
 
-import { mkdir, readFile, appendFile, stat, unlink } from 'node:fs/promises'
+import { mkdir, readFile, appendFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export function createChangeJournal(filePath, logger) {
@@ -73,23 +73,6 @@ export function createChangeJournal(filePath, logger) {
         return info.isFile()
       } catch {
         return false
-      }
-    },
-
-    /**
-     * Physical removal. Only the CleanupEngine may call this, and only after
-     * the rollback verified — deleting the journal is the LAST step of the
-     * whole lifecycle (requirement §七 step 14). The caller removes the whole
-     * tracking directory afterwards; this unlinks the file itself so a
-     * partially-removed directory still reports "no journal" on resume.
-     */
-    async destroy() {
-      try {
-        await unlink(filePath)
-      } catch (error) {
-        if (error?.code === 'ENOENT') return
-        logger?.warn?.(`[dsh-session-manager] journal destroy failed: ${error?.message ?? error}`)
-        throw error
       }
     },
   }

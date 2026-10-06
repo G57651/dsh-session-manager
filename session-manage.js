@@ -14,7 +14,7 @@
 //   purge   = stop all session activity, remove the session directory from
 //             $DSH_HOME/sessions, and drop the manifest entry.
 
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 

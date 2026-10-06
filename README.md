@@ -242,6 +242,17 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 
 ## 变更记录
 
+### 0.3.5（代码审计：4 处隐形 bug 修复 + 死代码清理）
+
+- **审计并修复的隐形 bug**（均补了回归用例）：
+  - **env 外部改动被静默覆盖**：① 会话创建的变量若其后被外部改过值，清理会盲目 unset（删掉别人的值）——现在仅当环境仍与 Journal 记录完全一致才 unset，否则记 `externally-modified-after-session` 冲突；② 既有变量被外部 unset 后，恢复逻辑会把它「复活」——现在判为冲突并保留外部删除。
+  - **权限变更丢失血统**：收养的既有文件仅被 chmod（内容不变）时，`permission_changed` 记录没有携带 `unbaselined` 标记——删除会话会把这个既有文件删掉。现在记录的血统与其它动作一致。
+  - **verify 阶段自相矛盾**：非空的会话新建目录在 path 阶段是「保守跳过」，verify 阶段却被记成失败（rollback_failed）；现在跳过结果统一传递。
+  - **ENOENT 竞态**：文件在状态检查与删除之间消失会被记成失败；现在视为幂等成功。
+  - resume 分支的「先删除后写标记」顺序与其它移除路径对齐（幂等已兜底，统一更稳）。
+- **死代码清理**：files.js（pathExists/relativeTo/absoluteIn/parentDirOf/noteDir/knownDirList/resourceType 属性及未用 path 导入）、baseline.js（BASELINE_FILE_NAME）、journal.js（destroy）、snapshots.js（destroyAll/limits/logger）、opener.js（platform getter/logger）、manager.js（未用的公共面与导出）、session-manage.js（未用 isAbsolute 导入）、smoke-host.mjs（未用导入）。两个扫描器（导出/导入引用）复查归零。
+- 测试：`smoke-lifecycle.mjs` 增至 **193 项断言**（新增 env 外部改/外部删、chmod 收养文件保留用例），连跑三轮全绿；真机复验：驱动 29/29、agent 回合 8/8、崩溃恢复通过、截断场景 5/5。
+
 ### 0.3.4（高危缺口修复：截断误删防护 + 环境变量不再污染宿主）
 
 - **修复基线截断可能误删既有文件**：基线扫描超过 `trackingMaxFiles`（默认 5000）时会截断，未收录的既有文件在首次 diff 时会被误判为「会话新建」——删除会话时就可能删掉它们（你的 default-workspace 已触发截断条件）。现在用 **birthtime 二次判定**（扫描已记录；无 birthtime 的 FS 回退 mtime）：早于会话开始的文件一律**静默收养为既有资源**——不写 Journal、不进资源视图、绝不被清理移除；会话对这类文件的修改/删除在回滚时跳过并报告 `preexisting-unbaselined`（原内容未被快照，无法恢复）。状态刷新时保留 `unbaselined` 血统标记，`before` 侧全程携带。

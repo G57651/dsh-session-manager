@@ -41,21 +41,15 @@ async function run(argv) {
   await spawn(argv)
 }
 
-export function createOpener({ logger } = {}) {
+export function createOpener() {
   const platform = process.platform
 
   return {
-    get platform() {
-      return platform
-    },
-
     /** Show the path in the OS file manager (Finder reveal / Explorer select). */
     async reveal(absolutePath) {
       if (platform === 'darwin') return run(['open', '-R', absolutePath])
       if (platform === 'win32') return run(['explorer.exe', `/select,${absolutePath}`])
       return run(['xdg-open', dirname(absolutePath)])
     },
-
-    logger,
   }
 }

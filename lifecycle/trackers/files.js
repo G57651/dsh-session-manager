@@ -14,7 +14,6 @@
 // manager knows the baseline, and "was it in the baseline" is the whole
 // question.
 
-import { join, relative, sep, dirname as pathDirname } from 'node:path'
 import { scanWorkspace, basenameOf } from '../baseline.js'
 import { ACTIONS, RESOURCE_TYPES, isConfigurationName } from '../types.js'
 
@@ -38,9 +37,6 @@ export function createFileTracker({ cwd, state, baselineDirs = [], sessionStarte
   }
 
   return {
-    /** Type this tracker reports for its own changes (files and kin). */
-    resourceType: RESOURCE_TYPES.FILE,
-
     /**
      * One diff pass over the workspace. Returns classified changes WITHOUT
      * ownership stamps (the manager owns that judgement). The tracker's state
@@ -82,7 +78,7 @@ export function createFileTracker({ cwd, state, baselineDirs = [], sessionStarte
             resourceType: typeFor(path),
             action: ACTIONS.PERMISSION_CHANGED,
             resource: { path },
-            before: { mode: known.mode },
+            before: { mode: known.mode, ...(known.unbaselined === true ? { unbaselined: true } : {}) },
             after: { ...now },
           })
           state.set(path, refresh(known, now))
@@ -165,19 +161,6 @@ export function createFileTracker({ cwd, state, baselineDirs = [], sessionStarte
 
       return changes
     },
-
-    /**
-     * Register a directory the cleanup engine just (re)created, so the next
-     * diff does not re-journal it as session-created.
-     */
-    noteDir(dirRelativePath) {
-      knownDirs.add(String(dirRelativePath))
-    },
-
-    /** Current known dir set (for the resources view). */
-    knownDirList() {
-      return [...knownDirs]
-    },
   }
 
   /**
@@ -213,27 +196,4 @@ export function predatesSession(entry, sessionStartedAt) {
   if (Number.isFinite(birth) && birth > 0) return birth < sessionStartedAt - PREEXISTING_SLACK_MS
   const mtime = Number(entry?.mtimeMs)
   return Number.isFinite(mtime) && mtime > 0 && mtime < sessionStartedAt - PREEXISTING_SLACK_MS
-}
-
-/** Probe whether an absolute path exists. */
-export async function pathExists(absolutePath) {
-  const { stat } = await import('node:fs/promises')
-  return stat(absolutePath).then(() => true).catch(() => false)
-}
-
-/** Workspace-relative path of an absolute path under cwd (null when outside). */
-export function relativeTo(cwd, absolutePath) {
-  const rel = relative(cwd, absolutePath)
-  if (rel === '' || rel.startsWith('..')) return null
-  return rel.split(sep).join('/')
-}
-
-/** Absolute path of a workspace-relative path (no existence check). */
-export function absoluteIn(cwd, relativePath) {
-  return join(cwd, String(relativePath).split('/').join(sep))
-}
-
-/** Parent relative dir of a workspace-relative path ('' for top level). */
-export function parentDirOf(relativePath) {
-  return pathDirname(String(relativePath))
 }
