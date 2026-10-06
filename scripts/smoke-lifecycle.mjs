@@ -1056,6 +1056,35 @@ function forceBoot() {
   rmSync(trackingDir(id), { recursive: true, force: true })
 }
 
+{
+  // R3-DEADLOCK: once the baseline fills the hash budget (trackingMaxFiles),
+  // every file the session creates AFTER that must still be tracked — the old
+  // walk cap silently hid all post-baseline files from every diff
+  const small = bootWith({ trackingMaxFiles: 3 })
+  const id = 'session-fullbudget'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'p1.txt'), 'p1')
+  writeFileSync(join(cwd, 'p2.txt'), 'p2')
+  writeFileSync(join(cwd, 'p3.txt'), 'p3')
+  writeFileSync(join(cwd, 'p4.txt'), 'p4')
+  await call(small.dispatch, 'track', { ids: [id] })   // baseline: 3 hashed, 1 hash-less, TRUNCATED
+  const bl = JSON.parse(readFileSync(join(trackingDir(id), 'baseline.json'), 'utf8'))
+  ok(bl.truncated === true, `fullbudget: baseline reports the hash budget as exhausted (got truncated=${bl.truncated})`)
+  ok(Object.values(bl.files).filter(entry => entry.sha256 === null).length === 1, 'fullbudget: exactly one file beyond the hash budget (existence recorded, no hash)')
+  writeFileSync(join(cwd, 'new.txt'), 'new')
+  writeFileSync(join(cwd, 'p1.txt'), 'p1-modified')
+  await call(small.dispatch, 'track', { ids: [id] })
+  const changes = await call(small.dispatch, 'changes', { id })
+  ok(changes.value.changes.some(record => record.resource?.path === 'new.txt' && record.action === 'created'), 'fullbudget: post-budget creation IS journaled')
+  ok(changes.value.changes.some(record => record.resource?.path === 'p1.txt' && record.action === 'modified'), 'fullbudget: post-budget modification IS journaled')
+  const result = await call(small.dispatch, 'delete', { ids: [id] })
+  ok(!existsSync(join(cwd, 'new.txt')), 'fullbudget: session-created file removed by delete')
+  ok(existsSync(join(cwd, 'p1.txt')), 'fullbudget: pre-existing modified file kept (restored or preserved)')
+  ok(existsSync(join(cwd, 'p2.txt')) && existsSync(join(cwd, 'p3.txt')) && existsSync(join(cwd, 'p4.txt')), 'fullbudget: other pre-existing files kept')
+  removeSessionFromCorpus(id)
+  rmSync(trackingDir(id), { recursive: true, force: true })
+}
+
 // --- dispose -----------------------------------------------------------------------
 // exercise the real unload path (store flush + timer teardown) on every instance
 for (const app of allApps) {

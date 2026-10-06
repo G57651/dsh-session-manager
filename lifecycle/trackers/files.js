@@ -44,7 +44,7 @@ export function createFileTracker({ cwd, state, baselineDirs = [], sessionStarte
      * saw, which is what makes repeated diffs cheap and correct.
      */
     async diff() {
-      const { files, dirs } = await scanWorkspace({ cwd, ...scan, onFile: async () => {} })
+      const { files, dirs } = await scanWorkspace({ cwd, ...scan, knownState: state })
       const changes = []
 
       // --- changed / removed, against last-known -----------------------------

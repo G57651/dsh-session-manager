@@ -44,16 +44,24 @@ export const DEFAULT_EXCLUDES = [
  * @param {(entry: {absolutePath: string, sha256: string, size: number, mode: number}) => Promise<void>} [opts.onFile]
  *   called for every hashed file so the caller can snapshot content inline
  */
-export async function scanWorkspace({ cwd, maxFiles = 5000, maxDepth = 12, excludes = DEFAULT_EXCLUDES, maxHashBytes = 64 * 1024 * 1024, onFile }) {
-  const excluded = new Set(excludes)
+export async function scanWorkspace({ cwd, maxFiles = 5000, maxDepth = 12, excludes = DEFAULT_EXCLUDES, maxHashBytes = 64 * 1024 * 1024, knownState, onFile }) {
+  // The walk covers the FULL tree — the old entry-count truncation silently
+  // hid every post-baseline file from every diff once the workspace filled
+  // its budget, deadlocking tracking entirely (audited on a 5000-file
+  // workspace: 50 new files, 0 journaled). The budget now bounds the
+  // EXPENSIVE part only: content hashing. Files whose size+mtime+mode match
+  // the known state are reused without a read; files beyond the hash budget
+  // still appear (sha256: null) and pre-existing ones are adopted via
+  // birthtime at diff time. `truncated` reports "hash budget exhausted".
   const files = new Map()
   const dirs = []
+  const excluded = new Set(excludes)
+  let hashed = 0
   let truncated = false
-  let visited = 0
 
   async function walk(absoluteDir, depth) {
-    if (truncated || depth > maxDepth) {
-      if (depth > maxDepth) truncated = true
+    if (depth > maxDepth) {
+      truncated = true
       return
     }
     let entries
@@ -63,7 +71,6 @@ export async function scanWorkspace({ cwd, maxFiles = 5000, maxDepth = 12, exclu
       return // unreadable subdir: skip, never fail the whole baseline
     }
     for (const entry of entries) {
-      if (truncated) return
       if (excluded.has(entry.name)) continue
       const absolutePath = join(absoluteDir, entry.name)
       const relativePath = relative(cwd, absolutePath).split(sep).join('/')
@@ -73,16 +80,25 @@ export async function scanWorkspace({ cwd, maxFiles = 5000, maxDepth = 12, exclu
         continue
       }
       if (entry.isFile() !== true) continue // sockets/symlinks/fifos are out of scope
-      visited += 1
-      if (visited > maxFiles) {
-        truncated = true
-        return
-      }
       const info = await stat(absolutePath).catch(() => null)
       if (info === null) continue
-      // birthtimeMs is the strongest "did this file exist before the session"
-      // signal (mtime moves on every write; birth time does not)
-      const record = { sha256: null, size: info.size, mode: info.mode, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs }
+      const known = knownState?.get(relativePath)
+      // unchanged since the last pass (size+mtime+mode): reuse the known
+      // entry — no content read, no hash. Provenance flags ride along.
+      // strict mtime equality: an unchanged file reports the exact same
+      // value across stats, and a rewritten file within the same millisecond
+      // still gets a different mtimeMs on any ns-precision filesystem
+      if (known !== undefined && known.size === info.size && known.mode === info.mode && info.mtimeMs === known.mtimeMs) {
+        files.set(relativePath, { ...known, mtimeMs: info.mtimeMs })
+        continue
+      }
+      hashed += 1
+      const record = { sha256: null, size: info.size, mode: info.mode, mtimeMs: info.mtimeMs }
+      if (hashed > maxFiles) {
+        truncated = true // hash budget exhausted; existence still recorded
+        files.set(relativePath, record)
+        continue
+      }
       if (info.size <= maxHashBytes) {
         try {
           const content = await readFile(absolutePath)
@@ -102,9 +118,7 @@ export async function scanWorkspace({ cwd, maxFiles = 5000, maxDepth = 12, exclu
   // deepest-first so cleanup can remove children before parents
   dirs.sort((left, right) => right.split('/').length - left.split('/').length || right.localeCompare(left))
   return { files, dirs, truncated }
-}
-
-/**
+}/**
  * Baseline persistence: one baseline.json per session under its tracking dir.
  * Small and rewritten wholesale — it changes once (first sight), so the
  * append-only discipline of the journal is not needed here.
