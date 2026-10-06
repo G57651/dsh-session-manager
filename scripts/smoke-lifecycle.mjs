@@ -174,6 +174,24 @@ const dispatch = app.dispatch
   removeSessionFromCorpus(id)
 }
 
+// --- deleted sessions must not be re-baselined by the boot sweep ----------------
+{
+  const id = 'session-norelive'
+  makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  ok(existsSync(trackingDir(id)), 'norelive: baseline exists before delete')
+  await call(dispatch, 'delete', { ids: [id] })
+  ok(!existsSync(trackingDir(id)), 'norelive: tracking destroyed by delete')
+  // the id stays in the corpus (host caches lag the disk) and we "restart"
+  const restarted = boot()
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 500))
+  ok(!existsSync(trackingDir(id)), 'norelive: boot sweep does NOT resurrect a deleted session tracking dir')
+  ok((await peek('list', { view: 'all' })).ok === true, 'norelive: list still renders after restart')
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 200))
+  ok(!existsSync(trackingDir(id)), 'norelive: list self-heal does NOT resurrect it either')
+  removeSessionFromCorpus(id)
+}
+
 // --- list self-heal: opening the panel baselines untracked rows -----------------
 {
   const id = 'session-listheal'

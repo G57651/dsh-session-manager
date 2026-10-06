@@ -174,6 +174,15 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
 
   const activityPathFor = sessionId => join(dirFor(sessionId), 'activity.json')
 
+  /** Drop a pending debounced activity flush (called before journal destruction). */
+  function cancelActivityFlush(sessionId) {
+    const timer = activityTimers.get(sessionId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      activityTimers.delete(sessionId)
+    }
+  }
+
   /** Record session activity: in-memory immediately, disk debounced. */
   function noteActivity(sessionId) {
     const now = Date.now()
@@ -182,6 +191,10 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     const timer = setTimeout(() => {
       activityTimers.delete(sessionId)
       void (async () => {
+        // the debounced flush can land AFTER a delete destroyed the tracking
+        // dir; writing would mkdir it back into existence (observed on a real
+        // host). A session in the trash never gets its dir resurrected.
+        if (manifest !== undefined && await manifest.has?.(sessionId) === true) return
         await mkdir(dirFor(sessionId), { recursive: true })
         await writeFile(activityPathFor(sessionId), `${JSON.stringify({ lastEventAt: lastSeenAt.get(sessionId) ?? now })}\n`, 'utf8')
       })().catch(error => {
@@ -236,11 +249,14 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     const stores = storesFor(sessionId)
     const existing = await stores.baselineStore.load()
     if (existing !== null) return existing
+    // A DELETED session (trash entry, purged or not) must not be re-baselined:
+    // the host keeps listing it in the stale in-memory corpus until a restart,
+    // and the boot sweep / list self-heal would otherwise resurrect the very
+    // tracking dir the delete just destroyed (observed on a real host). A
+    // restored session leaves the trash and becomes trackable again.
+    if (manifest !== undefined && await manifest.has?.(sessionId) === true) return null
     // A session with a pending cleanup is being torn down — baselining it now
-    // would race the resume (and can resurrect a tracking dir the rollback
-    // just finished destroying). Purged tombstones protect against a stale
-    // corpus listing a session whose data is already gone.
-    if (manifest !== undefined && await manifest.isPurged?.(sessionId) === true) return null
+    // would race the resume and resurrect a tracking dir mid-rollback.
     const pendingState = await stores.stateStore.load()
     if (pendingState !== null && RESUMABLE_STATES.has(pendingState.state)) return null
     let job = baselineJobs.get(sessionId)
@@ -578,6 +594,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
    * for inspection and retry (cleanupStatus stays queryable).
    */
   async function afterSessionDirRemoved(sessionId) {
+    cancelActivityFlush(sessionId)
     const stores = storesFor(sessionId)
     const engine = createEngine(sessionId, stores)
     const state = await engine.loadState()
