@@ -22,7 +22,7 @@
 // removed the directory, destroys the journal — the last step of the whole
 // lifecycle.
 
-import { stat, writeFile, rename, mkdir, readFile, rm, chmod } from 'node:fs/promises'
+import { stat, writeFile, rename, mkdir, readFile, rm, rmdir, chmod, realpath } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import {
   CLEANUP_STATES, RESUMABLE_STATES, LIFECYCLE_VERSION, OWNERSHIP,
@@ -96,7 +96,7 @@ function defaultPidAlive(pid) {
  * @param {object} opts.baselineStore createBaselineStore
  * @param {object} opts.snapshotStore
  * @param {object[]} [opts.depAdapters] dependency manager adapters (id-probed)
- * @param {object} [opts.env] env for environment-variable restore
+ * @param {object} [opts.env] env source for environment-variable FINGERPRINT comparisons (never written)
  * @param {'safe'|'force'} [opts.conflictMode]
  * @param {number} [opts.finalDiffSuspectMs] removal-time final-diff records
  *   whose session idle time exceeds this are treated as external edits:
@@ -417,8 +417,8 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     if (isInsideRoot(absolute, cwd) === false) return { exists: false, unsafe: true }
     const info = await stat(absolute).catch(() => null)
     if (info === null) return { exists: false }
-    if (info.isDirectory()) return { exists: true, isDirectory: true, sha256: null, size: 0 }
-    return { exists: true, isDirectory: false, sha256: null, size: info.size }
+    if (info.isDirectory()) return { exists: true, isDirectory: true, sha256: null, size: 0, mode: info.mode }
+    return { exists: true, isDirectory: false, sha256: null, size: info.size, mode: info.mode }
   }
 
   async function hashOf(cwd, relativePath) {
@@ -509,7 +509,8 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
           }
           continue
         }
-        if (currentHash === entry.baselineEntry.sha256) {
+        const modeMatches = Number.isFinite(entry.baselineEntry.mode) === false || current.mode === entry.baselineEntry.mode
+        if (currentHash === entry.baselineEntry.sha256 && modeMatches === true) {
           actions.push({ phase: 'path', path, outcome: 'noop', reason: 'already-restored' })
           continue
         }
@@ -592,6 +593,19 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     return preserved
   }
 
+  /**
+   * isInsideRoot is lexical; a symlinked path component inside the workspace
+   * can still resolve outside it. Re-check through realpath before any write
+   * or removal so a crafted (or unlucky) journal cannot act outside the cwd.
+   */
+  async function realContained(absolute, cwd) {
+    const parentReal = await realpath(dirname(absolute)).catch(() => null)
+    if (parentReal === null) return false
+    const rootReal = await realpath(cwd).catch(() => null)
+    if (rootReal === null) return false
+    return isInsideRoot(join(parentReal, absolute.slice(absolute.lastIndexOf('/') + 1)), rootReal)
+  }
+
   async function restoreBaselineContent(cwd, relativePath, baselineEntry) {
     const content = await snapshotStore.get(baselineEntry.sha256)
     if (content === null) {
@@ -601,6 +615,7 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
     }
     const absolute = join(cwd, relativePath)
     if (isInsideRoot(absolute, cwd) === false) return { ok: false, reason: 'unsafe-path' }
+    if ((await realContained(absolute, cwd)) === false) return { ok: false, reason: 'unsafe-path' }
     try {
       await mkdir(dirname(absolute), { recursive: true })
       const tmp = `${absolute}.dsm-restore-${Math.random().toString(36).slice(2, 8)}.tmp`
@@ -619,8 +634,13 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
   async function removePath(cwd, relativePath, isDirectory) {
     const absolute = join(cwd, relativePath)
     if (isInsideRoot(absolute, cwd) === false) return { ok: false, reason: 'unsafe-path' }
+    if ((await realContained(absolute, cwd)) === false) return { ok: false, reason: 'unsafe-path' }
     try {
-      await rm(absolute, { recursive: false, force: false })
+      // rm(recursive:false) throws EISDIR for ANY directory (Node ≥22), which
+      // turned every session-created directory into a hard failure; rmdir is
+      // the API with the "empty only" contract we want
+      if (isDirectory) await rmdir(absolute)
+      else await rm(absolute, { force: false })
       return { ok: true }
     } catch (error) {
       // an empty dir removes fine; one still holding foreign content refuses

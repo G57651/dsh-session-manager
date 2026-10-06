@@ -144,10 +144,21 @@ ${indent(client.body)}
 // actually declares — a selector on a missing field returns undefined and the
 // panel tree crashes (observed as a black panel in the real app, v0.2.1).
 {
-  const initMatch = /init: \(\) => \(\{([\s\S]*?)\}\),\n    actions:/.exec(client.body)
+  const initMatch = /init:\s*\(\)\s*=>\s*\(\{([\s\S]*?)\}\)\s*,\s*actions:/.exec(client.body)
   if (initMatch === null) fail("client.js: store init() literal not found — if the store shape changed, update this check (it guards useStore selectors against missing init fields)")
-  const declared = new Set([...initMatch[1].matchAll(/^\s*([A-Za-z_$][\w$]*):/gm)].map(match => match[1]))
-  const selectors = [...client.body.matchAll(/useStore\(s => s\.([A-Za-z_$][\w$]*)\)/g)].map(match => match[1])
+  // only TOP-LEVEL keys of the init object literal count as declared state
+  const declared = new Set()
+  {
+    let depth = 0
+    for (const line of initMatch[1].split('\n')) {
+      const key = depth === 0 ? /^\s*([A-Za-z_$][\w$]*)\s*:/.exec(line) : null
+      if (key !== null) declared.add(key[1])
+      depth += (line.match(/[\[{]/g) ?? []).length - (line.match(/[\]}]/g) ?? []).length
+    }
+  }
+  // any parameter name, optional parens, optional spaces: useStore(s => s.x),
+  // useStore(s=>s.x), useStore((store) => store.x) all count
+  const selectors = [...client.body.matchAll(/useStore\(\s*\(?\s*[A-Za-z_$][\w$]*\s*\)?\s*=>\s*[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)/g)].map(match => match[1])
   const missing = [...new Set(selectors)].filter(name => declared.has(name) === false)
   if (missing.length > 0) fail(`client.js: useStore selectors missing from store init(): ${missing.join(', ')}`)
 }

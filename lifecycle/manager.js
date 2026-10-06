@@ -118,6 +118,9 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
   const runtimes = new Map() // sessionId → runtime
   const baselineJobs = new Map() // sessionId → in-flight capture promise
   const diffTimers = new Map() // sessionId → timer
+  const diffJobs = new Map() // sessionId → in-flight diff promise (dedupe concurrent passes)
+  const removalJobs = new Set() // sessionIds whose prepareRemoval is in flight
+  let disposed = false // set on unload: in-flight work must stop writing
   const lastSeenAt = new Map() // sessionId → last session-event timestamp (in-memory)
   const activityTimers = new Map() // sessionId → debounced activity.json writer
   let bootstrapStarted = false
@@ -210,7 +213,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
         // dir; writing would mkdir it back into existence (observed on a real
         // host). A session in the trash never gets its dir resurrected.
         if (manifest !== undefined && await manifest.has?.(sessionId) === true) return
-        await mkdir(dirFor(sessionId), { recursive: true })
+        await mkdir(dirFor(sessionId), { recursive: true, mode: 0o700 })
         await writeFile(activityPathFor(sessionId), `${JSON.stringify({ lastEventAt: lastSeenAt.get(sessionId) ?? now })}\n`, 'utf8')
       })().catch(error => {
         logger?.warn?.(`[dsh-session-manager] activity persist for ${sessionId} failed: ${error?.message ?? error}`)
@@ -359,6 +362,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
   /** Stamp ownership (and any caller metadata), then append to the journal. */
   async function record(runtime, change, extraMetadata = {}) {
     if (change === null || change === undefined) return null
+    if (disposed === true) return null // an unloaded instance must not write
     const inBaseline = baselineMembership(change, runtime.baseline)
     const stamped = makeChangeRecord({
       seq: 0, // the journal assigns the real sequence number on append
@@ -509,8 +513,21 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
    * is stamped onto every record this pass produces. Returns the number of
    * changes journaled.
    */
-  async function diffSession(sessionId, { recordMetadata } = {}) {
-    if (enabled() === false) return { journaled: 0, tracked: false }
+  function diffSession(sessionId, { recordMetadata } = {}) {
+    // concurrent passes over the same session would double-journal every
+    // change they interleave on (debounce + explicit track + list self-heal +
+    // the removal-time final diff are all live callers) — share one pass
+    const existing = diffJobs.get(sessionId)
+    if (existing !== undefined) return existing
+    const job = runDiff(sessionId, { recordMetadata }).finally(() => {
+      diffJobs.delete(sessionId)
+    })
+    diffJobs.set(sessionId, job)
+    return job
+  }
+
+  async function runDiff(sessionId, { recordMetadata } = {}) {
+    if (enabled() === false || disposed === true) return { journaled: 0, tracked: false }
     await ensureBaseline(sessionId)
     const runtime = await runtimeFor(sessionId)
     if (runtime === null) return { journaled: 0, tracked: false }
@@ -572,8 +589,22 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
    * long after the session went quiet is far more likely somebody else's, so
    * it is preserved and reported instead of rolled back.
    */
-  async function prepareRemoval(sessionId, { mode = 'full' } = {}) {
-    if (enabled() === false || getConfig().autoCleanup === false) {
+  async function prepareRemoval(sessionId, options = {}) {
+    if (removalJobs.has(sessionId) === true) {
+      return { ok: false, state: null, actions: [], conflicts: [], failures: [{ phase: 'lock', reason: 'removal-in-flight' }] }
+    }
+    removalJobs.add(sessionId)
+    try {
+      return await prepareRemovalInner(sessionId, options)
+    } finally {
+      removalJobs.delete(sessionId)
+    }
+  }
+
+  async function prepareRemovalInner(sessionId, { mode = 'full', explicit = false } = {}) {
+    // autoCleanup gates the AUTOMATIC (delete/purge) path only; an explicit
+    // cleanup RPC is a user decision and must not be silently skipped by it
+    if (enabled() === false || (explicit !== true && getConfig().autoCleanup === false)) {
       return { ok: true, skipped: 'tracking-disabled', state: null, actions: [], conflicts: [], failures: [] }
     }
     if ((await hasAnyTracking(sessionId)) === false) {
@@ -837,14 +868,16 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
       if (record.metadata?.url !== undefined) row.url = record.metadata.url
       rows.set(key, row)
       if (typeof record.resource.to === 'string' && record.resource.to !== '') {
-        // moved/renamed: surface the destination as its own row
+        // moved/renamed: surface the destination as its own row — MERGE when
+        // the destination already has records, or its history would be lost
         const toKey = rowKey('path', record.resource.to)
+        const existingTo = rows.get(toKey)
         rows.set(toKey, {
           resourceType: record.resourceType,
           identifier: record.resource.to,
           ownership: record.ownership,
-          actions: [`${record.action} (from ${path})`],
-          baseline: null,
+          actions: [...(existingTo?.actions ?? []), `${record.action} (from ${path})`],
+          baseline: existingTo?.baseline ?? null,
           lastTimestamp: record.timestamp,
         })
       }
@@ -950,10 +983,10 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
    */
   async function cleanupSession(sessionId, { mode = 'rollback-only' } = {}) {
     if (mode === 'rollback-only') {
-      return prepareRemoval(sessionId, { mode: 'rollback-only' })
+      return prepareRemoval(sessionId, { mode: 'rollback-only', explicit: true })
     }
     if (mode === 'full') {
-      const prepared = await prepareRemoval(sessionId, { mode: 'full' })
+      const prepared = await prepareRemoval(sessionId, { mode: 'full', explicit: true })
       if (prepared.skipped !== undefined) return prepared
       await beforeSessionDirRemoval(sessionId)
       const removed = await removeSessionDirForResume(sessionId)
@@ -978,8 +1011,9 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
       const outcome = await engine.rollback()
       return { ok: outcome.ok, state: outcome.state, actions: outcome.actions, conflicts: outcome.conflicts, failures: outcome.failures }
     }
-    if (state.state === CLEANUP_STATES.ROLLBACK_FAILED) {
-      // a rollback that failed last time: rerun it, then finish only if clean
+    if (state.state === CLEANUP_STATES.ROLLBACK_FAILED || state.state === CLEANUP_STATES.DELETE_REQUESTED || state.state === CLEANUP_STATES.ROLLING_BACK) {
+      // an unfinished rollback (failed, or a crash between requestCleanup and
+      // rollback) must RUN before the teardown may destroy the journal
       const outcome = await engine.rollback()
       if (outcome.ok !== true) {
         return { ok: false, state: outcome.state, actions: outcome.actions, conflicts: outcome.conflicts, failures: outcome.failures }
@@ -1024,8 +1058,10 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
     return engine.cancelPending()
   }
 
-  /** Debounce timers teardown (plugin unload). */
+  /** Debounce timers teardown (plugin unload). In-flight work is told to stop
+   * via `disposed`, so an HMR remount cannot leave two writers on one journal. */
   function dispose() {
+    disposed = true
     for (const timer of diffTimers.values()) clearTimeout(timer)
     diffTimers.clear()
     for (const timer of activityTimers.values()) clearTimeout(timer)

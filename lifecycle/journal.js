@@ -9,7 +9,7 @@
 // journal (0-based per file) so replay order is unambiguous even when two
 // changes share a millisecond timestamp.
 
-import { mkdir, readFile, appendFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, appendFile, stat, open } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export function createChangeJournal(filePath, logger) {
@@ -46,6 +46,41 @@ export function createChangeJournal(filePath, logger) {
     return Number.isFinite(last?.seq) ? last.seq + 1 : 0
   }
 
+  /**
+   * True when the file does not end in a newline — i.e. a previous write was
+   * torn. Appending onto that fragment would concatenate two JSON objects into
+   * one unparsable line, losing the NEW record as well.
+   */
+  async function needsLineBreak() {
+    let handle
+    try {
+      handle = await open(filePath, 'r')
+      const info = await handle.stat()
+      if (info.size === 0) return false
+      const buffer = Buffer.alloc(1)
+      await handle.read(buffer, 0, 1, info.size - 1)
+      return buffer[0] !== 0x0a
+    } catch {
+      return false // ENOENT etc. — a fresh file needs no break
+    } finally {
+      await handle?.close()
+    }
+  }
+
+  // Appends are serialized through one chain: seq allocation is a
+  // read-modify-write, and concurrent callers (env/process records racing the
+  // debounced diff and the removal-time final diff) all got seq 0 before this.
+  let appendQueue = Promise.resolve()
+
+  async function doAppend(record) {
+    const seq = await nextSeq()
+    const stamped = { ...record, seq }
+    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
+    const prefix = (await needsLineBreak()) === true ? '\n' : ''
+    await appendFile(filePath, `${prefix}${JSON.stringify(stamped)}\n`, 'utf8')
+    return stamped
+  }
+
   return {
     /**
      * Append one record with an assigned sequence number. The record object is
@@ -54,12 +89,11 @@ export function createChangeJournal(filePath, logger) {
      * @param {object} record partial record from makeChangeRecord (without seq)
      * @returns {Promise<object>} the record as written, with `seq` set
      */
-    async append(record) {
-      const seq = await nextSeq()
-      const stamped = { ...record, seq }
-      await mkdir(dirname(filePath), { recursive: true })
-      await appendFile(filePath, `${JSON.stringify(stamped)}\n`, 'utf8')
-      return stamped
+    append(record) {
+      const run = appendQueue.then(() => doAppend(record))
+      // a failed append must not poison the queue for every later caller
+      appendQueue = run.then(() => {}, () => {})
+      return run
     },
 
     readAll,

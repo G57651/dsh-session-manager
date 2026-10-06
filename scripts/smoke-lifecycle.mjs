@@ -9,8 +9,8 @@
 //   Case 3  session deletes a file        → cleanup restores the deleted file
 //   Case 4  session installs a dependency → cleanup uninstalls it
 //   Case 5  session uses an existing dep  → cleanup leaves it alone
-//   Case 6  env var created               → cleanup unsets it
-//   Case 7  env var modified (+secret)    → cleanup restores / reports conflict
+//   Case 6  env var created               → recorded (values redacted; host env untouched)
+//   Case 7  env var modified (+secret)    → recorded redacted; cleanup never writes the host env
 //   Case 8  crash mid-cleanup             → restart resumes and finishes
 //   Case 9  cleanup run twice             → idempotent, no damage
 //   Case 10 external conflict             → detected, not silently overwritten;
@@ -21,7 +21,7 @@
 //
 // Run: node scripts/smoke-lifecycle.mjs
 
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -54,16 +54,19 @@ const workspace = {
   archived: new Set(),
   stopped: [],
 }
+const archiveFailIds = new Set()
+const noCwdIds = new Set()
 const services = {
   sessionController: { list: async () => ({ items: [] }) },
   sessionQuery: {
-    listSessions: async () => headers().map(header => ({ header, live: true, persisted: true })),
+    listSessions: async () => headers().map(header => noCwdIds.has(header.id) ? { header: { ...header, cwd: undefined }, live: true, persisted: true } : { header, live: true, persisted: true }),
     readTitleSnapshots: async ids => ids.map(id => ({ sessionId: id, status: 'fulfilled', value: { session: { version: 4, id, createdAt: NOW } } })),
   },
-  sessionPersistence: { list: async () => headers().map(header => ({ header, revision: 'r1', sizeBytes: 100, eventCount: 1 })) },
+  sessionPersistence: { list: async () => headers().map(header => noCwdIds.has(header.id) ? { header: { ...header, cwd: undefined }, revision: 'r1', sizeBytes: 100, eventCount: 1 } : { header, revision: 'r1', sizeBytes: 100, eventCount: 1 }) },
   workspaceRegistry: {
     get archivedSessionIds() { return [...workspace.archived] },
     archiveSession: async (id, options) => {
+      if (archiveFailIds.has(id)) throw new Error('registry exploded')
       if (!workspaces.has(id)) throw Object.assign(new Error('unknown'), { name: 'WorkspaceUnknownSessionError' })
       workspace.archived.add(id)
       if (options?.stopActivity === true) workspace.stopped.push(id)
@@ -72,20 +75,23 @@ const services = {
   },
 }
 
+const allApps = []
 function bootWith(configOverrides = {}) {
   const eventListeners = {}
   const captured = {}
+  captured.disposers = []
   const ctx = {
     logger: { warn: () => {}, info: () => {}, error: () => {} },
     on: (name, listener) => { (eventListeners[name] ??= []).push(listener); return () => {} },
-    effect: (execute) => execute(),
+    effect: (execute) => { const disposer = execute(); captured.disposers.push(disposer); return disposer },
     get: name => services[name],
     connection: { rpc: { handle: (channel, dispatch) => { captured.dispatch = dispatch; return () => {} } } },
   }
   const config = hostModule.Config(configOverrides)
   hostModule.apply(ctx, config)
-  return {
+  const instance = {
     dispatch: captured.dispatch,
+    disposers: captured.disposers,
     emitTo(name, ...args) {
       for (const listener of eventListeners[name] ?? []) listener(...args)
     },
@@ -102,6 +108,8 @@ function bootWith(configOverrides = {}) {
       this.emit(sessionId, { type: 'tool/result', data: { turn: 1, step: 1, message: { role: 'toolResult', content: [] } }, time: Date.now() })
     },
   }
+  allApps.push(instance)
+  return instance
 }
 
 const boot = () => bootWith({})
@@ -332,7 +340,7 @@ const dispatch = app.dispatch
 
   await call(dispatch, 'delete', { ids: [id] })
   ok(!existsSync(join(cwd, 'node_modules', 'axios')), 'case4: session-installed package removed')
-  ok(existsSync(join(cwd, 'node_modules')), 'case4: node_modules root itself survives (it held pre-existing nothing, but the dir entry is session-created → may be pruned; presence is acceptable)')
+  ok(existsSync(join(cwd, 'node_modules')), 'case4: node_modules root survives (excluded from file tracking, so the session never owned it)')
   ok(!read(join(cwd, 'package.json')).includes('axios'), 'case4: package.json restored without the axios dependency')
   removeSessionFromCorpus(id)
 }
@@ -412,7 +420,7 @@ const dispatch = app.dispatch
   ok(!('DSM_LIFE_FOO' in process.env), 'case6: host process env NOT mutated (record-only)')
   const changes = await call(dispatch, 'changes', { id })
   const setRecord = changes.value.changes.find(record => record.resourceType === 'environment_variable')
-  ok(setRecord?.action === 'set' && setRecord.before === null && setRecord.after?.value === '123', 'case6: set journaled with before=null')
+  ok(setRecord?.action === 'set' && setRecord.before === null && setRecord.after?.redacted === true && typeof setRecord.after?.hash === 'string', 'case6: set journaled with before=null and a redacted value')
 
   // runtime-affecting variables are excluded from tracking outright
   {
@@ -443,7 +451,7 @@ const dispatch = app.dispatch
   const changes = await call(dispatch, 'changes', { id })
   const barRecord = changes.value.changes.find(record => record.resource?.name === 'DSM_LIFE_BAR')
   const tokenRecord = changes.value.changes.find(record => record.resource?.name === 'DSM_LIFE_TOKEN')
-  ok(barRecord?.before?.value === 'old' && barRecord.after?.value === 'new', 'case7: non-secret values journalled in plaintext')
+  ok(barRecord?.before?.redacted === true && barRecord.after?.redacted === true && barRecord.before.value === undefined, 'case7: env values are NEVER journalled in plaintext (redacted+fingerprint)')
   ok(tokenRecord?.before?.redacted === true && tokenRecord.before.value === undefined && tokenRecord.before.hash !== undefined, 'case7: secret value redacted, existence+fingerprint kept')
 
   ok(process.env.DSM_LIFE_BAR === 'old', 'case7: host env untouched while the session ran (record-only)')
@@ -818,8 +826,243 @@ function forceBoot() {
   ok(manage.decodeSegment(manage.encodeSegment('a/b~c')) === 'a/b~c', 'encid: decodeSegment round-trips encodeSegment')
 }
 
+// ===================== round-2 audit regressions =====================
+{
+  // H1: session-created DIRECTORIES must actually be removed (rm recursive:false
+  // throws EISDIR for any directory on modern Node)
+  const id = 'session-dirclean'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  mkdirSync(join(cwd, 'newdir'), { recursive: true })
+  writeFileSync(join(cwd, 'newdir', 'inner.txt'), 'inner')
+  await call(dispatch, 'track', { ids: [id] })
+  const result = await call(dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.cleanup?.state === 'rollback_verified', `dirclean: cleanup verified (got ${JSON.stringify(result.value.results[0]?.cleanup)})`)
+  ok(!existsSync(join(cwd, 'newdir', 'inner.txt')), 'dirclean: file inside the created dir removed')
+  ok(!existsSync(join(cwd, 'newdir')), 'dirclean: session-created directory removed')
+  removeSessionFromCorpus(id)
+}
+{
+  // H2: cleanup RPC resume with state delete_requested/rolling_back must run the
+  // rollback BEFORE destroying the journal
+  const id = 'session-resume-first'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'r.txt'), 'v1')
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(trackingDir(id), 'cleanup.json'), `${JSON.stringify({
+    version: 1, sessionId: id, state: 'delete_requested', mode: 'full', requestedAt: NOW, attempts: 0, results: [], conflicts: [], failures: [],
+  })}\n`)
+  const result = await call(dispatch, 'cleanup', { ids: [id], mode: 'resume' })
+  ok(result.value.results[0]?.ok === true && result.value.results[0]?.state === 'complete', `resume-first: complete (got ${JSON.stringify(result.value.results[0])})`)
+  ok(!existsSync(join(cwd, 'r.txt')), 'resume-first: rollback ran before the teardown (file removed)')
+  ok(!existsSync(trackingDir(id)), 'resume-first: journal destroyed')
+  removeSessionFromCorpus(id)
+}
+{
+  // H3/H4: journal sequence numbers stay unique under concurrency and a torn
+  // trailing line never swallows the next record
+  const { createChangeJournal } = await import(new URL('../lifecycle/journal.js', import.meta.url).href)
+  const jdir = mkdtempSync(join(tmpdir(), 'dsm-journal-'))
+  const journal = createChangeJournal(join(jdir, 'changes.jsonl'), null)
+  await Promise.all(Array.from({ length: 30 }, (_, index) => journal.append({ marker: index })))
+  const records = await journal.readAll()
+  const seqs = new Set(records.map(record => record.seq))
+  ok(records.length === 30 && seqs.size === 30, `journal: 30 concurrent appends get 30 unique seqs (got ${records.length} records / ${seqs.size} seqs)`)
+  writeFileSync(join(jdir, 'changes.jsonl'), `${'x'.repeat(10)}`) // torn line without newline
+  await journal.append({ marker: 'after-torn' })
+  const after = await journal.readAll()
+  ok(after.some(record => record.marker === 'after-torn'), 'journal: a record appended after a torn line survives')
+  rmSync(jdir, { recursive: true, force: true })
+}
+{
+  // H5: download URLs are scrubbed (credentials, signed query tokens)
+  const id = 'session-urlscrub'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  await app.toolCall(id, 'bash', { command: "curl 'https://user:pw@files.example.com/data.bin?token=PLAINTOKEN123&ok=1' -o data.bin" })
+  writeFileSync(join(cwd, 'data.bin'), 'bytes')
+  await call(dispatch, 'track', { ids: [id] })
+  const journal = read(join(trackingDir(id), 'changes.jsonl'))
+  ok(journal.includes('PLAINTOKEN123') === false && journal.includes('user:pw@') === false, 'urlscrub: URL credentials/tokens never reach the journal')
+  const changes = await call(dispatch, 'changes', { id })
+  const download = changes.value.changes.find(record => record.resourceType === 'download')
+  ok(download?.metadata?.url?.includes('<REDACTED>') === true || download?.metadata?.url?.includes('REDACTED') === true, `urlscrub: sanitized URL recorded (got ${download?.metadata?.url})`)
+  removeSessionFromCorpus(id)
+}
+{
+  // H6: background commands are scrubbed before they are journalled (and the
+  // cleanup report re-persists them into cleanup.json)
+  const id = 'session-cmdscrub'
+  makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  await app.toolCall(id, 'bash', { command: 'nohup curl -H "Authorization: Bearer sk-PLAINSECRET42" https://user:pw@api.example.com/job & ' })
+  ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 1), 'cmdscrub: spawn journaled')
+  const journal = read(join(trackingDir(id), 'changes.jsonl'))
+  ok(journal.includes('sk-PLAINSECRET42') === false, 'cmdscrub: bearer token never reaches the journal')
+  ok(journal.includes('user:pw@') === false, 'cmdscrub: URL credentials never reach the journal')
+  removeSessionFromCorpus(id)
+}
+{
+  // M1: journal-supplied hashes are validated (no snapshot-store path escape)
+  const { createSnapshotStore } = await import(new URL('../lifecycle/snapshots.js', import.meta.url).href)
+  const sdir = mkdtempSync(join(tmpdir(), 'dsm-snap-'))
+  const store = createSnapshotStore(join(sdir, 'snapshots'))
+  const escaped = join(sdir, 'escape-target')
+  writeFileSync(escaped, 'host file content')
+  ok((await store.get('../escape-target')) === null, 'snap: non-hash lookup returns null (no path escape)')
+  ok((await store.has('../escape-target')) === false, 'snap: non-hash probe is false')
+  rmSync(sdir, { recursive: true, force: true })
+}
+{
+  // M3: a permission-only change is actually restored by cleanup
+  const id = 'session-chmod'
+  const cwd = makeSession(id)
+  const target = join(cwd, 'perm.txt')
+  writeFileSync(target, 'same')
+  await call(dispatch, 'track', { ids: [id] })
+  const baselineMode = statSync(target).mode
+  chmodSync(target, 0o600)
+  await call(dispatch, 'track', { ids: [id] })
+  await call(dispatch, 'delete', { ids: [id] })
+  ok(statSync(target).mode === baselineMode, `chmod: permission restored (got ${statSync(target).mode.toString(8)} vs ${baselineMode.toString(8)})`)
+  removeSessionFromCorpus(id)
+}
+{
+  // M4: the EXPLICIT cleanup RPC works even with autoCleanup:false
+  const noAuto = bootWith({ autoCleanup: false })
+  const id = 'session-explicitclean'
+  const cwd = makeSession(id)
+  await call(noAuto.dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'e.txt'), 'v')
+  await call(noAuto.dispatch, 'track', { ids: [id] })
+  const deleted = await call(noAuto.dispatch, 'delete', { ids: [id] })
+  ok(deleted.value.results[0]?.cleanup?.skipped === 'tracking-disabled', 'explicitclean: automatic cleanup stays off for delete')
+  const result = await call(noAuto.dispatch, 'cleanup', { ids: [id], mode: 'full' })
+  ok(result.value.results[0]?.ok === true, `explicitclean: explicit cleanup still runs (got ${JSON.stringify(result.value.results[0])})`)
+  ok(!existsSync(join(cwd, 'e.txt')), 'explicitclean: rollback executed')
+  removeSessionFromCorpus(id)
+}
+{
+  // M9: an archive failure must not leave the session hidden in the trash
+  const id = 'session-archivefail'
+  const cwd = makeSession(id)
+  archiveFailIds.add(id)
+  const result = await call(dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.ok === false && result.value.results[0]?.error === 'archive-failed', `archivefail: failure reported (got ${JSON.stringify(result.value.results[0])})`)
+  const list = await call(dispatch, 'list', { view: 'all' })
+  ok(list.value.rows.some(row => row.id === id), 'archivefail: session still visible (trash entry rolled back)')
+  archiveFailIds.delete(id)
+  removeSessionFromCorpus(id)
+}
+{
+  // M12: env parsing — child-scoped prefixes are not persistent, multiple
+  // assignments and quoted separators are handled
+  const id = 'session-envparse'
+  makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  await app.toolCall(id, 'bash', { command: 'FOO_CHILD=bar npm test' })
+  await app.toolCall(id, 'bash', { command: 'export AA_MULTI=1 BB_MULTI=2' })
+  await app.toolCall(id, 'bash', { command: 'export CC_QUOTED="x;y"' })
+  ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 3), 'envparse: records journaled')
+  const changes = await call(dispatch, 'changes', { id })
+  const names = changes.value.changes.filter(record => record.resourceType === 'environment_variable').map(record => record.resource.name)
+  ok(names.includes('FOO_CHILD') === false, 'envparse: child-scoped prefix is not a persistent env change')
+  ok(names.includes('AA_MULTI') && names.includes('BB_MULTI'), `envparse: multiple assignments on one export line (got ${JSON.stringify(names)})`)
+  const cc = changes.value.changes.find(record => record.resource?.name === 'CC_QUOTED')
+  ok(cc !== undefined && cc.resource?.name === 'CC_QUOTED', 'envparse: quoted value with a separator stays one assignment')
+  removeSessionFromCorpus(id)
+}
+{
+  // M13: the process classifier must not fire on URL '&' or '&&'
+  const id = 'session-procregex'
+  makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  await app.toolCall(id, 'bash', { command: "curl 'http://x.example/?a=1&'" })
+  await app.toolCall(id, 'bash', { command: 'make && echo done' })
+  await app.toolCall(id, 'bash', { command: 'sleep 1 &\necho done' })
+  ok(await waitFor(async () => (await peek('changes', { id })).value.total >= 1), 'procregex: the background line is journaled')
+  const changes = await call(dispatch, 'changes', { id })
+  const spawns = changes.value.changes.filter(record => record.resourceType === 'process')
+  ok(spawns.length === 1, `procregex: exactly one spawn recorded (got ${spawns.length})`)
+  ok(spawns[0]?.resource?.command?.startsWith('sleep 1') === true, 'procregex: the spawn is the backgrounded command')
+  removeSessionFromCorpus(id)
+}
+{
+  // M14: the download intent attaches to the hinted target file
+  const id = 'session-dlhint'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  await app.toolCall(id, 'bash', { command: 'curl -o real.bin https://files.example.com/real.bin' })
+  for (const name of ['decoy1.txt', 'decoy2.txt', 'decoy3.txt', 'decoy4.txt']) writeFileSync(join(cwd, name), 'decoy')
+  writeFileSync(join(cwd, 'real.bin'), 'real')
+  await call(dispatch, 'track', { ids: [id] })
+  const changes = await call(dispatch, 'changes', { id })
+  const download = changes.value.changes.find(record => record.resourceType === 'download')
+  ok(download?.resource?.path === 'real.bin', `dlhint: intent attaches to the hinted target (got ${download?.resource?.path})`)
+  removeSessionFromCorpus(id)
+}
+{
+  // M15: pnpm-style symlinked packages are tracked and their removal unlinks
+  // only the symlink
+  const id = 'session-symlinkdep'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] }) // baseline: nothing installed yet
+  const store = join(home, 'store', 'axios')
+  mkdirSync(store, { recursive: true })
+  writeFileSync(join(store, 'package.json'), JSON.stringify({ name: 'axios', version: '1.0.0' }))
+  mkdirSync(join(cwd, 'node_modules'), { recursive: true })
+  symlinkSync(store, join(cwd, 'node_modules', 'axios'))
+  await call(dispatch, 'track', { ids: [id] })
+  const changes = await call(dispatch, 'changes', { id })
+  ok(changes.value.changes.some(record => record.resourceType === 'dependency' && record.action === 'installed' && record.resource.package === 'axios'), 'symlinkdep: symlinked package tracked as installed')
+  await call(dispatch, 'delete', { ids: [id] })
+  ok(!existsSync(join(cwd, 'node_modules', 'axios')), 'symlinkdep: symlink removed')
+  ok(existsSync(store) && existsSync(join(store, 'package.json')), 'symlinkdep: the link target is untouched')
+  removeSessionFromCorpus(id)
+}
+{
+  // M19: a session whose header carries no cwd stays untracked (legacy path)
+  const id = 'session-nocwd'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'user.txt'), 'mine')
+  noCwdIds.add(id)
+  await call(dispatch, 'track', { ids: [id] })
+  ok(!existsSync(trackingDir(id)), 'nocwd: no baseline without a cwd')
+  const result = await call(dispatch, 'delete', { ids: [id] })
+  ok(result.value.results[0]?.cleanup?.skipped === 'legacy-untracked', 'nocwd: delete reports legacy-untracked')
+  ok(existsSync(join(cwd, 'user.txt')), 'nocwd: workspace untouched')
+  noCwdIds.delete(id)
+  removeSessionFromCorpus(id)
+}
+
+{
+  // M6: concurrent tracking passes must not double-journal the same change
+  const id = 'session-diffmutex'
+  const cwd = makeSession(id)
+  writeFileSync(join(cwd, 'base.txt'), 'v1')
+  await call(dispatch, 'track', { ids: [id] })   // baseline
+  writeFileSync(join(cwd, 'base.txt'), 'v2')      // the change every pass will see
+  await Promise.all([
+    peek('track', { ids: [id] }),
+    peek('track', { ids: [id] }),
+    peek('track', { ids: [id] }),
+    peek('track', { ids: [id] }),
+  ])
+  const changes = await call(dispatch, 'changes', { id })
+  const modified = changes.value.changes.filter(record => record.resource?.path === 'base.txt' && record.action === 'modified')
+  ok(modified.length === 1, `diffmutex: exactly one modified record for the path (got ${modified.length})`)
+  removeSessionFromCorpus(id)
+  rmSync(trackingDir(id), { recursive: true, force: true })
+}
+
 // --- dispose -----------------------------------------------------------------------
-for (const { disposer } of []) await disposer // no disposers captured in boot()
+// exercise the real unload path (store flush + timer teardown) on every instance
+for (const app of allApps) {
+  for (const disposer of app.disposers ?? []) {
+    await (typeof disposer === 'function' ? disposer() : undefined)
+  }
+}
 
 rmSync(home, { recursive: true, force: true })
 console.log(`LIFECYCLE OK — ${checks} checks passed`)

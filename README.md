@@ -39,7 +39,7 @@ Change Journal                 逐条 append-only 落盘 + 删除前最终 diff�
 | `configuration` | 修改（package.json、.env、tsconfig 等知名配置） | 按基线快照恢复 |
 | `download` | downloaded（记录源 URL / 目标 / 时间 / 大小 / 哈希） | 同 file：新建则删，覆盖了原有文件则按基线恢复 |
 | `dependency` | installed / uninstalled / upgraded（Adapter/Strategy，内置 `node_modules` 适配器） | 会话新装 → 卸载；已有依赖 → **绝不动**（升级/卸过仅报告） |
-| `environment_variable` | set / unset（含 before / after / scope） | 会话新建 → unset；修改 → 恢复原值；敏感值见「安全」 |
+| `environment_variable` | set / unset（含 before / after / scope） | **仅审计**：值一律只存存在性 + 指纹；宿主 env 从不被写入，清理也不写（报告 `host-env-untouched`） |
 | `process` | spawned（nohup / 后台 `&`） | 记录在案；存活进程由宿主停活动机制处理 |
 
 **归属权（Ownership）**——判断一个资源到底是不是当前 Session 产生的，记录时刻对照 Baseline 判定并冻结：
@@ -66,7 +66,7 @@ Change Journal                 逐条 append-only 落盘 + 删除前最终 diff�
  6. 恢复被删除的资源（快照回写 + 哈希校验）
  7. 恢复被修改的资源（含配置、权限位）
  8. 移除会话新建的资源（文件先于目录，目录最深优先）
- 9. 恢复环境变量（before=null → unset；修改 → 恢复原值）
+ 9. 环境变量定级（只读报告：宿主 env 从不被写入）
 10. 校验清理结果（独立 verify 阶段）
 11. 落盘 cleanup 结果（rollback_verified / rollback_failed）
 12. 删除 Session 数据（会话目录）
@@ -95,7 +95,7 @@ $DSH_HOME/dsh-session-manager/tracking/<encoded-session-id>/
 
 ## 四、RPC API
 
-host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返回逐条结果；原有 7 端点行为不变）：
+host 半经 `/dsh-session-manager` 通道服务（批量端点接受 `ids` 数组；`changes`/`resources`/`openResource` 为单 id；原有 7 端点行为不变）：
 
 | 端点 | 入参 | 说明 | 引入 |
 |---|---|---|---|
@@ -137,9 +137,9 @@ host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返
 
 ## 六、数据文件
 
-- `$DSH_HOME/dsh-session-manager-deleted.json` — 回收站清单（`{id, title, cwd, deletedAt, wasArchived}`）。
+- `$DSH_HOME/dsh-session-manager-deleted.json` — 回收站清单（`{id, title, cwd, deletedAt, wasArchived, purged}`；`purged` 是重启后仍生效的墓碑标记）。
 - `$DSH_HOME/dsh-session-manager-titles.json` — 会话标题缓存（含负缓存；实时会话经 `session/title` 事件保持最新）。
-- `$DSH_HOME/dsh-session-manager/tracking/<id>/` — 每会话的 `baseline.json` / `changes.jsonl` / `cleanup.json` / `snapshots/`（0.2.0）。
+- `$DSH_HOME/dsh-session-manager/tracking/<id>/` — 每会话的 `baseline.json` / `changes.jsonl` / `cleanup.json` / `activity.json`（会话活动时钟）/ `snapshots/`（0.2.0+；目录以 0700 创建，快照含文件内容，随 Journal 一并销毁）。
 
 以上文件都由插件自维护；tracking 目录在清理验证完成后随 Journal 一起删除，卸载插件后可手动删除其余文件。
 
@@ -208,7 +208,7 @@ dsh plugin --profile desktop add ./dsh-session-manager
 ```sh
 node scripts/build-client.mjs        # 组装 client.js（纯 Node，无外部依赖）
 node scripts/smoke-host.mjs          # host 半功能冒烟（隔离临时 $DSH_HOME，66 项断言）
-node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-10 + 下载/移动/旧会话/恢复取消（130 项断言）
+node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：Case 1-10 + 审计回归套件（284 项断言）
 ```
 
 > `scripts/` 仅存在于源码仓库，不随 tarball 发布——请 clone 仓库后在仓库根目录运行。
@@ -227,7 +227,7 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 **变更捕获的边界**
 
 - 跟踪是「事件 + diff」混合式：`tool/call` 解析 shell 命令、`tool/result` 触发防抖 diff、删除前补最终 diff。子进程内部的临时文件、管道、不落盘副作用无法观测；工作区之外的文件（`$DSH_HOME` 自身、其他目录）不在资源边界内。
-- host 半**只记录**环境变量变更、**绝不改写宿主进程 env**：工具子 shell 里的 `export` 随子进程消亡，把解析值写回宿主会让会话命令污染 harness 自身的运行环境（PATH / NODE_OPTIONS 等）。敏感运行变量（PATH、NODE_OPTIONS、LD_*/DYLD_*、HOME、DSH_HOME 等）直接排除出跟踪；清理阶段的 env 恢复对「宿主从未改变过」的变量是刻意的 no-op。
+- host 半**只记录**环境变量变更、**绝不改写宿主进程 env**：工具子 shell 里的 `export` 随子进程消亡，把解析值写回宿主会让会话命令污染 harness 自身的运行环境（PATH / NODE_OPTIONS 等）。**所有 env 值一律脱敏**（存在性 + SHA-256 指纹，明文永不落盘；`DATABASE_URL` 这类“名字无害”的值同样如此）；运行性变量（PATH、NODE_OPTIONS、LD_*/DYLD_*、HOME、DSH_HOME 等）直接排除出跟踪；只有显式 `export` 才算持久变更（`FOO=bar cmd` 前缀不记录）；清理阶段对 env 只做定级报告，**不写任何值**。
 - 真机实测注意：宿主会为会话发出 title 等后台事件，它们会计入「活跃」判定——外部修改若落在空闲窗口（`trackingIdleWindowMs`，默认 5 分钟）内，删除时会按会话变更参与校验。需要更保守边界可将该值调小。
 - 依赖卸载 = 移除包目录（离线安全、幂等，package.json/lockfile 由文件级回滚恢复）；已有依赖的自动降级/重装不做，仅报告。pip 等其它管理器按适配器接口扩展。
 - 超过 `trackingMaxSnapshotBytes` 的文件只记哈希，无法自动恢复（清理报告 `snapshot-unavailable`）。
@@ -236,11 +236,35 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 **面板语义（0.1.x 起）**
 
 - 删除语义：官方层无删除 API。软删除 = 清单标记 + 原生归档隐藏（0.1.4 起会话目录同样被移除，恢复仅还原列表行、不还原磁盘数据）；彻底删除 = 资源回滚 + 停活动 + 移除会话目录 + 销毁 Journal（有 `locate()` 定位 + `$DSH_HOME/sessions` 路径守卫 + id 校验三重防护，拒绝越界路径）。
-- 幽灵行清理（v0.1.1 修复）：移除会话目录不触发拆卸，官方侧边栏拿不到移除事件——彻底删除后插件改为三步失效（逐工作区 `detachSession` → `unarchiveSession` → `api-session/removed` 转发），无需重启即消失。残留限制：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，同进程内重连（如刷新页面）可能重新拉到残留条目，进程重启后彻底清理。
+- 幽灵行清理（v0.1.1 修复）：移除会话目录不触发拆卸，官方侧边栏拿不到移除事件——彻底删除后插件改为两步失效（逐工作区 `detachSession` → `api-session/removed` 转发；刻意不做 unarchive——它会把已消失的 id 重新发布给下一次语料读取），无需重启即消失。残留限制：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，同进程内重连（如刷新页面）可能重新拉到残留条目，进程重启后彻底清理。
 - 归档/删除无远程事件：这两个操作后列表由 RPC 返回值本地刷新；归档当前激活会话时原生 UI 会自动切走主面板（官方行为）。
+- **Journal 内容**（0.3.7 起）：下载 URL 去除凭据/签名参数、后台命令遮蔽 `Authorization` 头与密钥式赋值后才落盘；快照库按内容存储（含文件原文），目录 0700、随 Journal 销毁。
 - **打开资源**：仅调用本机文件管理器——macOS `open -R`（访达定位）、Windows `explorer /select`（资源管理器选中）、Linux `xdg-open`（打开父目录）；所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
 
 ## 变更记录
+
+### 0.3.7（第二轮技能化审计：15 处隐形 bug 修复）
+
+第二轮 `code-review` + `diagnosing-bugs` 审计聚焦「修复回归验证 / 未覆盖角落与并发 / 安全与隐私 / 测试有效性」，全部红灯先行：
+
+- **会话新建目录从来清理不掉**：`rm(recursive:false)` 对任何目录都抛 `EISDIR`，`ENOTEMPTY` 保守分支是死代码——改用 `rmdir`（空目录契约）。
+- **显式 resume 跳过回滚**：`cleanup` RPC 的 `resume` 对 `delete_requested`/`rolling_back` 状态直接拆除并销毁 Journal，从不执行回滚——现在这三态一律先回滚、失败即止。
+- **Journal 并发序号全为 0**：`nextSeq` 是读-改-写无串行化（env/process 记录与 diff 并发写入时全部拿到 seq 0）——append 改为单链串行；撕裂尾行不再吞掉下一条记录（写前补换行修复）。
+- **密钥泄漏面**：下载 URL 的 `user:pass@` 与签名/token 查询参数会原文进入 Journal 与 RPC——现在落盘前脱敏；后台命令中的 `Authorization: Bearer …` 与密钥式赋值同样遮蔽；**环境变量值一律脱敏**（不再依赖名字启发式，`DATABASE_URL=postgres://user:pw@…` 类不再明文）。
+- **快照库路径逃逸**：Journal 可构造的 `sha256`（如 `../x`）能读到快照目录之外的文件——现在只接受 64 位十六进制。
+- **符号链接越过工作区**：`isInsideRoot` 是词法检查，经符号链接父目录的恢复/删除会作用于工作区之外——写入/删除前追加 `realpath` 包含性复核。
+- **权限变更不被恢复**：仅 chmod 的既有文件在清理时命中 `already-restored`，权限原样保留——现在 mode 不一致同样执行恢复。
+- **显式 cleanup 被 autoCleanup 门控**：`autoCleanup:false` 下 `cleanup` RPC 返回 skipped——显式请求现在绕过该门控；同时**清理被跳过时 delete/purge 保留 tracking 目录**（否则显式清理的唯一依据被销毁）。
+- **并发 diff 重复记账**：防抖 diff、显式 track、列表自愈、删除前最终 diff 并发时同一修改会被记录 2–3 次——按会话共享在途 diff。
+- **卸载后仍在写入**：HMR 重挂载后旧实例的在途 diff 继续追加——`disposed` 守卫停止写入；同会话的 prepareRemoval 加在途锁。
+- **归档失败留下假墓碑**：archive 抛错时 delete 已写入回收站条目，会话被隐藏却未删除——失败即回滚条目。
+- **进程误判与漏判**：URL 查询里的 `&`、`make &&` 会被当成后台启动；`cmd1 &
+cmd2` 漏判——改为按行单 `&` 判定。
+- **下载归因错配**：一条下载意图被贴到第一个创建的文件——现在按 `-o/--output` 或 URL 文件名提示优先匹配。
+- **pnpm 符号链接依赖不被跟踪**：`node_modules/<pkg>` 为符号链接时适配器跳过——现在接受（卸载只删链接，不动 store）。
+- **env 解析**：`FOO=bar cmd` 前缀被误记（现在只有显式 `export` 才算持久）、`export A=1 B=2` 漏掉第二个、`"x;y"` 被错误拆分。
+- 文档/注释同步：env 语义、purge 不归档、幽灵行两步失效、activity.json、284 项断言数等；`build-client` 的选择器检查改为支持无空格/任意参数名且只认顶层 init 键。
+- 测试：`smoke-lifecycle.mjs` 增至 **284 项断言**（第二轮新增 15 组回归用例，并发去重与 env 解析用例均经验证可红）；真机复验：驱动 29/29、agent 回合 8/8、崩溃恢复、截断 5/5。
 
 ### 0.3.6（技能化双轴审计：7 处隐形 bug 修复 + 死代码清理）
 

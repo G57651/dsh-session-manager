@@ -45,7 +45,9 @@ export const nodeModulesAdapter = {
       return installed
     }
     for (const entry of entries) {
-      if (entry.isDirectory() !== true) continue
+      // pnpm links packages into node_modules as symlinks (and @scope dirs are
+      // real dirs) — both are installed packages
+      if (entry.isDirectory() !== true && entry.isSymbolicLink() !== true) continue
       if (entry.name.startsWith('.')) continue // .bin, .cache, .pnpm store links
       if (entry.name.startsWith('@')) {
         let scoped
@@ -55,7 +57,7 @@ export const nodeModulesAdapter = {
           continue
         }
         for (const child of scoped) {
-          if (child.isDirectory() !== true) continue
+          if (child.isDirectory() !== true && child.isSymbolicLink() !== true) continue
           const name = `${entry.name}/${child.name}`
           installed.set(name, { version: await versionOf(join(root, entry.name, child.name)) })
         }

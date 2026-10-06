@@ -17,7 +17,7 @@
 //    ('secret-unrecoverable') rather than pretending to restore what it
 //    cannot read back.
 
-import { ACTIONS, RESOURCE_TYPES, isSecretName, sha256Hex, isPlainValue } from '../types.js'
+import { ACTIONS, RESOURCE_TYPES, sha256Hex } from '../types.js'
 
 /**
  * Value envelope for the journal: plaintext for non-secrets (rollback needs
@@ -25,9 +25,11 @@ import { ACTIONS, RESOURCE_TYPES, isSecretName, sha256Hex, isPlainValue } from '
  */
 export function envValueEntry(name, value) {
   if (value === undefined) return null // variable absent
-  if (!isPlainValue(value)) return { redacted: true, hash: sha256Hex(String(value)), type: typeof value }
-  if (isSecretName(name)) return { redacted: true, hash: sha256Hex(String(value)) }
-  return { redacted: false, value: String(value) }
+  // The plugin never writes the host env and cleanup never restores from
+  // these records, so no plaintext value is ever NEEDED — and a value's name
+  // is no proof of its innocence (`DATABASE_URL=postgres://user:pw@…`). Every
+  // value is therefore stored as existence plus a fingerprint.
+  return { redacted: true, hash: sha256Hex(String(value)) }
 }
 
 /**
@@ -43,48 +45,93 @@ const EXCLUDED_ENV_NAMES = new Set([
   'PROMPT_COMMAND', 'CDPATH', 'GLOBIGNORE', 'DSH_HOME',
 ])
 
-const EXPORT_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*')|(?:"[^"]*")|[^\s#]*)/
-const EXPORT_BARE_RE = /^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s|$|=)/
-const UNSET_RE = /^\s*unset\s+(?:-v\s+)?([A-Za-z_][A-Za-z0-9_]*)/
-
-function unquote(raw) {
-  if (raw === undefined || raw === '') return ''
-  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
-    return raw.slice(1, -1)
+/**
+ * Split a shell command into statements on `;`, `&&`, `||` and newlines —
+ * OUTSIDE quotes, so `export A="x;y"` stays one statement.
+ */
+function splitStatements(command) {
+  const out = []
+  let current = ''
+  let quote = null
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]
+    if (quote !== null) {
+      current += char
+      if (char === quote && command[index - 1] !== '\\') quote = null
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      current += char
+      continue
+    }
+    if (char === '\n' || char === ';') {
+      out.push(current)
+      current = ''
+      continue
+    }
+    if ((char === '&' && command[index + 1] === '&') || (char === '|' && command[index + 1] === '|')) {
+      out.push(current)
+      current = ''
+      index += 1
+      continue
+    }
+    current += char
   }
-  return raw
+  out.push(current)
+  return out
 }
 
+const EXPORT_PREFIX_RE = /^\s*export\s+/
+const EXPORT_BARE_RE = /^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/
+const UNSET_RE = /^\s*unset\s+(?:-v\s+)?(.+)$/
+const ASSIGNMENT_RE = /([A-Za-z_][A-Za-z0-9_]*)=('([^']*)'|"((?:[^"\\]|\\.)*)"|([^\s'"]*))/g
+
 /**
- * Parse the persistent env mutations out of one shell command. Only
- * `export NAME=...`, bare `export NAME` and `unset NAME` persist past the
- * command — `NAME=x cmd` prefix assignments are scoped to the child and are
- * deliberately NOT recorded (recording them would manufacture rollback work
- * for changes that never outlived the command).
+ * Parse the PERSISTENT env mutations out of one shell command. Only the
+ * `export` keyword makes a mutation persistent: a bare `FOO=bar cmd` prefix is
+ * scoped to the child process that dies with it, so it is deliberately NOT
+ * recorded (recording it would manufacture rollback work for a change that
+ * never outlived the command). Multiple assignments on one export line and
+ * quoted values containing separators are handled; single quotes keep their
+ * content verbatim, double quotes drop one escaping level.
  *
  * @param {string} command
  * @returns {{name: string, kind: 'set'|'unset', rawValue?: string}[]}
  */
 export function parseEnvCommand(command) {
   const out = []
-  for (const line of String(command ?? '').split(/\n|&&|\|\||;/)) {
-    const trimmed = line.trim()
+  for (const statement of splitStatements(String(command ?? ''))) {
+    const trimmed = statement.trim()
     if (trimmed === '' || trimmed.startsWith('#')) continue
     const unset = UNSET_RE.exec(trimmed)
     if (unset !== null) {
-      out.push({ name: unset[1], kind: 'unset' })
+      for (const name of unset[1].split(/\s+/)) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) === true) out.push({ name, kind: 'unset' })
+      }
       continue
     }
-    const assigned = EXPORT_RE.exec(trimmed)
-    if (assigned !== null) {
-      out.push({ name: assigned[1], kind: 'set', rawValue: unquote(assigned[2]) })
-      continue
-    }
+    if (EXPORT_PREFIX_RE.test(trimmed) === false) continue
     const bare = EXPORT_BARE_RE.exec(trimmed)
     if (bare !== null) {
       // `export NAME` promotes an existing (possibly local) variable; the
       // effective value is whatever the host process already carries
       out.push({ name: bare[1], kind: 'set', rawValue: process.env[bare[1]] ?? '' })
+      continue
+    }
+    const remainder = trimmed.replace(EXPORT_PREFIX_RE, '')
+    let sawAssignment = false
+    for (const match of remainder.matchAll(ASSIGNMENT_RE)) {
+      sawAssignment = true
+      const raw = match[3] ?? match[4] ?? match[5] ?? ''
+      out.push({ name: match[1], kind: 'set', rawValue: raw })
+    }
+    if (sawAssignment === false) {
+      for (const name of remainder.split(/\s+/)) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) === true) {
+          out.push({ name, kind: 'set', rawValue: process.env[name] ?? '' })
+        }
+      }
     }
   }
   return out

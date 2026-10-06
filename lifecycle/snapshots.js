@@ -14,6 +14,8 @@ import { mkdir, writeFile, readFile, stat, rename } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { sha256Hex } from './types.js'
 
+const HASH_RE = /^[0-9a-f]{64}$/
+
 export function createSnapshotStore(rootDir, { maxFileBytes = 8 * 1024 * 1024, logger } = {}) {
   const dirFor = hash => join(rootDir, hash.slice(0, 2), hash)
 
@@ -28,7 +30,7 @@ export function createSnapshotStore(rootDir, { maxFileBytes = 8 * 1024 * 1024, l
       const target = dirFor(hash)
       const known = await stat(target).then(info => info.isFile()).catch(() => false)
       if (!known) {
-        await mkdir(dirname(target), { recursive: true })
+        await mkdir(dirname(target), { recursive: true, mode: 0o700 })
         const tmp = `${target}.${Math.random().toString(36).slice(2, 8)}.tmp`
         await writeFile(tmp, content)
         // rename for atomicity: a crash mid-write leaves a .tmp orphan, never
@@ -45,6 +47,9 @@ export function createSnapshotStore(rootDir, { maxFileBytes = 8 * 1024 * 1024, l
      * @returns {Promise<Buffer|null>}
      */
     async get(hash) {
+      // hashes come FROM the journal, which a hostile/corrupted file could
+      // forge ('../../x' used to escape this directory)
+      if (HASH_RE.test(String(hash)) === false) return null
       try {
         return await readFile(dirFor(String(hash)))
       } catch {
@@ -53,6 +58,7 @@ export function createSnapshotStore(rootDir, { maxFileBytes = 8 * 1024 * 1024, l
     },
 
     async has(hash) {
+      if (HASH_RE.test(String(hash)) === false) return false
       return stat(dirFor(String(hash))).then(info => info.isFile()).catch(() => false)
     },
 

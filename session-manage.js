@@ -669,6 +669,9 @@ export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCac
     const result = outcome.results?.[0]
     if (outcome.unavailable || result === undefined || !result.ok) {
       if (result?.error !== 'session-not-found') {
+        // the archive failed, so the session is still live: a trash entry left
+        // behind would hide it from every view without anything deleted
+        await manifest.remove(id).catch(() => {})
         results.push({ id, ok: false, error: result?.error ?? 'workspace-unavailable' })
         continue
       }
@@ -679,17 +682,22 @@ export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCac
     // stop so the final diff races no writers.
     const prepared = await runResourceCleanup(resourceManager, id, logger)
 
+    // Cleanup skipped (e.g. autoCleanup:false) must leave the tracking dir —
+     // and with it the journal — intact: otherwise the sole basis for a later
+    // explicit cleanup would be destroyed by a delete that never rolled back.
+    const ranCleanup = prepared !== undefined && prepared.skipped === undefined
+
     const located = await locateSessionDir(sessionsRoot, id)
     if (!located.ok) {
       // No directory (already gone, or the sessions root does not exist yet):
       // the trash entry alone is the correct state, and restore stays
       // available. The journal may still be destroyable when rollback verified.
-      if (resourceManager !== undefined) {
+      if (resourceManager !== undefined && ranCleanup) {
         await resourceManager.beforeSessionDirRemoval(id).catch(() => {})
         const finished = await resourceManager.afterSessionDirRemoved(id).catch(() => ({ removed: false }))
         results.push({ id, ok: true, removedDirectory: false, cleanup: summarizeCleanup(prepared), journalRemoved: finished?.removed === true })
       } else {
-        results.push({ id, ok: true, removedDirectory: false })
+        results.push({ id, ok: true, removedDirectory: false, cleanup: summarizeCleanup(prepared), journalRemoved: false })
       }
       continue
     }
@@ -699,14 +707,14 @@ export async function softDeleteSessions(ctx, ids, { headers, manifest, titleCac
       continue
     }
     try {
-      if (resourceManager !== undefined) {
+      if (resourceManager !== undefined && ranCleanup) {
         // crash-resumable marker BEFORE the unlink (requirement §八)
         await resourceManager.beforeSessionDirRemoval(id).catch(() => {})
       }
       await rm(located.directory, { recursive: true, force: true })
       titleCache.delete(id)
       let journalRemoved
-      if (resourceManager !== undefined) {
+      if (resourceManager !== undefined && ranCleanup) {
         // journal destroyed only when rollback verified (requirement §七 step 14)
         const finished = await resourceManager.afterSessionDirRemoved(id).catch(() => ({ removed: false }))
         journalRemoved = finished?.removed === true
@@ -734,6 +742,7 @@ async function removeSessionDir(ctx, id, { manifest, sessionsRoot, titleCache, l
   // before the session directory (and with it the last session-owned state)
   // disappears (requirement §七).
   const prepared = await runResourceCleanup(resourceManager, id, logger)
+  const ranCleanup = prepared !== undefined && prepared.skipped === undefined
 
   const located = await locateSessionDir(sessionsRoot, id)
   if (!located.ok) {
@@ -746,12 +755,12 @@ async function removeSessionDir(ctx, id, { manifest, sessionsRoot, titleCache, l
     await invalidateRemovedSession(ctx, id, logger)
     purgeTracker?.mark(id)
     titleCache?.delete(id)
-    if (resourceManager !== undefined) {
+    if (resourceManager !== undefined && ranCleanup) {
       await resourceManager.beforeSessionDirRemoval(id).catch(() => {})
       const finished = await resourceManager.afterSessionDirRemoved(id).catch(() => ({ removed: false }))
       return { id, ok: true, freedBytes: 0, cleanup: summarizeCleanup(prepared), journalRemoved: finished?.removed === true }
     }
-    return { id, ok: true, freedBytes: 0 }
+    return { id, ok: true, freedBytes: 0, cleanup: summarizeCleanup(prepared), journalRemoved: false }
   }
   if (!isSessionDir(located.directory, sessionsRoot, id)) {
     logger?.warn?.(`[dsh-session-manager] refusing to remove ${located.directory}: outside the sessions root or mismatched id`)
@@ -763,7 +772,7 @@ async function removeSessionDir(ctx, id, { manifest, sessionsRoot, titleCache, l
     freedBytes = Number.isFinite(snapshot?.sizeBytes) ? snapshot.sizeBytes : 0
   } catch { /* best-effort accounting */ }
   try {
-    if (resourceManager !== undefined) {
+    if (resourceManager !== undefined && ranCleanup) {
       await resourceManager.beforeSessionDirRemoval(id).catch(() => {})
     }
     await rm(located.directory, { recursive: true, force: true })
@@ -779,11 +788,11 @@ async function removeSessionDir(ctx, id, { manifest, sessionsRoot, titleCache, l
   await invalidateRemovedSession(ctx, id, logger)
   purgeTracker?.mark(id)
   let journalRemoved
-  if (resourceManager !== undefined) {
+  if (resourceManager !== undefined && ranCleanup) {
     const finished = await resourceManager.afterSessionDirRemoved(id).catch(() => ({ removed: false }))
     journalRemoved = finished?.removed === true
   }
-  return { id, ok: true, freedBytes, cleanup: summarizeCleanup(prepared), journalRemoved }
+  return { id, ok: true, freedBytes, cleanup: summarizeCleanup(prepared), journalRemoved: journalRemoved === true }
 }
 
 export async function restoreSessions(ctx, ids, { manifest, titleCache, logger, resourceManager }) {

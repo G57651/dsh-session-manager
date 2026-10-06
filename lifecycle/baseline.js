@@ -149,7 +149,7 @@ export function createBaselineStore(filePath, snapshotStore, logger) {
         dirs,
         ...(opts.extra !== null && typeof opts.extra === 'object' ? opts.extra : {}),
       }
-      await mkdir(dirname(filePath), { recursive: true })
+      await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
       const tmp = `${filePath}.${Math.random().toString(36).slice(2, 8)}.tmp`
       await writeFile(tmp, `${JSON.stringify(baseline, null, 1)}\n`, 'utf8')
       await rename(tmp, filePath)
