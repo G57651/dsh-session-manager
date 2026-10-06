@@ -853,12 +853,11 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
   }
 
   /**
-   * Open one of the session's resources: reveal it in the OS file manager
-   * (default) or launch it with a user-selected application (scanned list).
-   * The path is workspace-relative and MUST resolve inside the session's
-   * baseline cwd — the RPC surface never opens arbitrary host paths.
+   * Open one of the session's resources in the OS file manager (the ONLY open
+   * method). The path is workspace-relative and MUST resolve inside the
+   * session's baseline cwd — the RPC surface never opens arbitrary host paths.
    */
-  async function openResource(sessionId, relativePath, app) {
+  async function openResource(sessionId, relativePath) {
     if (typeof relativePath !== 'string' || relativePath === '') {
       return { ok: false, error: { code: 'no-path', message: 'a resource path is required' } }
     }
@@ -881,9 +880,8 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, g
       return { ok: false, error: { code: 'resource-missing', message: 'the resource no longer exists on disk' } }
     }
     try {
-      if (typeof app === 'string' && app !== '') await opener.openWith(app, absolute)
-      else await opener.reveal(absolute)
-      return { ok: true, value: { sessionId, path: relativePath, mode: typeof app === 'string' && app !== '' ? 'app' : 'reveal' } }
+      await opener.reveal(absolute)
+      return { ok: true, value: { sessionId, path: relativePath, mode: 'reveal' } }
     } catch (error) {
       logger?.warn?.(`[dsh-session-manager] open ${relativePath} failed: ${error?.message ?? error}`)
       return { ok: false, error: { code: error?.code ?? 'open-failed', message: error?.message ?? 'open-failed' } }

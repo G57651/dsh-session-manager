@@ -17,8 +17,7 @@
 //   cleanupStatus { ids }               -> per-id cleanup state machine summary
 //   cleanup       { ids, mode }         -> 'rollback-only' | 'resume' | 'full'
 //   track         { ids }               -> run one diff pass now (ops/debug)
-//   openResource  { id, path, app? }    -> reveal in file manager / open with app
-//   listApplications {}                 -> scanned installed apps (app dropdown)
+//   openResource  { id, path }          -> reveal in the OS file manager
 //
 // Every handler returns `{ ok: true, value }` or `{ ok: false, error }`;
 // batch endpoints take a single `ids` array so one RPC covers both the
@@ -530,30 +529,18 @@ export function apply(ctx, config) {
         return { ok: true, value: { results } }
       }, logger),
     },
-    // open a resource in the OS file manager or a user-selected application;
-    // listApplications feeds the client's app dropdown
+    // open a resource in the OS file manager (the only open method)
     openResource: {
       handle: async (payload) => {
         const id = typeof payload?.id === 'string' ? payload.id : ''
         if (id === '') return fail('no-ids', 'a single session id is required')
         try {
-          const result = await resourceManager.openResource(id, payload?.path, typeof payload?.app === 'string' ? payload.app : undefined)
+          const result = await resourceManager.openResource(id, payload?.path)
           if (result.ok === true) return result
           return fail(result.error?.code ?? 'open-failed', result.error?.message ?? 'open-failed')
         } catch (error) {
           logger?.warn?.(`[dsh-session-manager] openResource failed: ${error?.message ?? error}`)
           return fail('internal', error?.message ?? 'open-failed')
-        }
-      },
-    },
-    listApplications: {
-      handle: async (payload) => {
-        try {
-          const value = await opener.listApplications({ refresh: payload?.refresh === true })
-          return { ok: true, value }
-        } catch (error) {
-          logger?.warn?.(`[dsh-session-manager] listApplications failed: ${error?.message ?? error}`)
-          return fail('applications-failed', error?.message ?? 'applications-failed')
         }
       },
     },

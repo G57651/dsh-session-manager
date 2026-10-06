@@ -583,7 +583,7 @@ function forceBoot() {
   ok((await call(dispatch, 'changes', {})).error?.code === 'no-ids', 'changes: missing id rejected')
 }
 
-// --- open / reveal resources (file manager + app dropdown plumbing) -------------
+// --- open / reveal resources (OS file manager is the only open method) ---------
 {
   const { openLog } = await import(new URL('../lifecycle/opener.js', import.meta.url).href)
   const id = 'session-open'
@@ -591,37 +591,21 @@ function forceBoot() {
   writeFileSync(join(cwd, 'openable.txt'), 'open me')
   await call(dispatch, 'track', { ids: [id] })
 
-  // default: reveal in the OS file manager
   let result = await call(dispatch, 'openResource', { id, path: 'openable.txt' })
-  ok(result.ok === true && result.value.mode === 'reveal', `open: default reveal ok, got ${JSON.stringify(result)}`)
-  const platform = (await call(dispatch, 'listApplications', {})).value.platform
-  if (platform === 'darwin') {
+  ok(result.ok === true && result.value.mode === 'reveal', `open: reveal ok, got ${JSON.stringify(result)}`)
+  if (process.platform === 'darwin') {
     ok(openLog.some(argv => argv[0] === 'open' && argv[1] === '-R' && argv[2] === join(cwd, 'openable.txt')), 'open: reveal argv is `open -R <abs>`')
   }
 
-  // with a scanned application
-  result = await call(dispatch, 'openResource', { id, path: 'openable.txt', app: 'Visual Studio Code' })
-  ok(result.ok === true && result.value.mode === 'app', 'open: with app ok')
-  if (platform === 'darwin') {
-    ok(openLog.at(-1)[0] === 'open' && openLog.at(-1)[1] === '-a', 'open: app argv uses `open -a`')
-  }
-
-  // the workspace root itself ('.') is a legal target
   result = await call(dispatch, 'openResource', { id, path: '.' })
   ok(result.ok === true, 'open: workspace root allowed')
 
-  // guards: traversal outside the workspace, missing files
   result = await call(dispatch, 'openResource', { id, path: '../outside.txt' })
   ok(result.ok === false && result.error.code === 'unsafe-path', 'open: traversal rejected')
   result = await call(dispatch, 'openResource', { id, path: 'gone.txt' })
   ok(result.ok === false && result.error.code === 'resource-missing', 'open: missing file reported')
   result = await call(dispatch, 'openResource', { id: 'session-never', path: 'x.txt' })
   ok(result.ok === false && result.error.code === 'untracked', 'open: untracked session reported')
-
-  // app list is scan-fed and sorted
-  const apps = await call(dispatch, 'listApplications', {})
-  ok(apps.ok === true && Array.isArray(apps.value.applications), 'open: application list ok')
-  ok(JSON.stringify(apps.value.applications) === JSON.stringify([...apps.value.applications].sort((a, b) => a.localeCompare(b))), 'open: application list sorted')
 
   removeSessionFromCorpus(id)
 }

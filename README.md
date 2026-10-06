@@ -110,8 +110,7 @@ host 半经 `/dsh-session-manager` 通道服务（全部接受批量 `ids`，返
 | `cleanupStatus` | `{ ids }` | 每会话清理状态机快照（冲突 / 失败明细） | **0.2.0** |
 | `cleanup` | `{ ids, mode }` | `rollback-only`（回滚资源保留会话）/ `resume` / `full` | **0.2.0** |
 | `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试） | **0.2.0** |
-| `openResource` | `{ id, path, app? }` | 在文件管理器中显示（默认）或用指定应用打开会话资源；路径仅限该会话工作区内 | **0.3.0** |
-| `listApplications` | `{ refresh? }` | 扫描本机已安装应用（macOS /Applications、Windows 开始菜单、Linux .desktop），供打开方式下拉 | **0.3.0** |
+| `openResource` | `{ id, path }` | 在本机文件管理器中显示会话资源（访达定位 / 资源管理器选中）；路径仅限该会话工作区内 | **0.3.0** |
 
 `delete` / `purge` / `restore` 返回值新增可选 `cleanup` / `journalRemoved` 字段——旧客户端忽略即可。
 
@@ -238,9 +237,15 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：需求 Case 1-
 - 删除语义：官方层无删除 API。软删除 = 清单标记 + 原生归档隐藏（0.1.4 起会话目录同样被移除，恢复仅还原列表行、不还原磁盘数据）；彻底删除 = 资源回滚 + 停活动 + 移除会话目录 + 销毁 Journal（有 `locate()` 定位 + `$DSH_HOME/sessions` 路径守卫 + id 校验三重防护，拒绝越界路径）。
 - 幽灵行清理（v0.1.1 修复）：移除会话目录不触发拆卸，官方侧边栏拿不到移除事件——彻底删除后插件改为三步失效（逐工作区 `detachSession` → `unarchiveSession` → `api-session/removed` 转发），无需重启即消失。残留限制：`sessionQuery` 语料库与 `sessionController` 是进程内缓存，同进程内重连（如刷新页面）可能重新拉到残留条目，进程重启后彻底清理。
 - 归档/删除无远程事件：这两个操作后列表由 RPC 返回值本地刷新；归档当前激活会话时原生 UI 会自动切走主面板（官方行为）。
-- **打开资源**的平台差异：macOS 用 `open -R` / `open -a`；Windows 用 `explorer /select`（定位）与 `start` 经 cmd 启动（参数先经 shell 元字符校验）；Linux 定位用 `xdg-open`、按应用打开用 `gtk-launch`。所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
+- **打开资源**：仅调用本机文件管理器——macOS `open -R`（访达定位）、Windows `explorer /select`（资源管理器选中）、Linux `xdg-open`（打开父目录）；所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
 
 ## 变更记录
+
+### 0.3.2（打开方式收敛为本机文件管理器）
+
+- **资源打开只保留本机文件管理器**：移除应用下拉、应用扫描（`listApplications` 端点及 `openWith`/扫描代码全部删除），单个打开、批量打开、打开工作区统一走文件管理器定位（macOS 访达 `open -R` / Windows 资源管理器 `/select` / Linux `xdg-open` 父目录）。工具栏改为一行说明文案 + 全选 / 反选 / 打开工作区 / 打开所选。
+- `openResource` 端点签名收敛为 `{ id, path }`（不再接受 `app`）。
+- 测试：smoke-lifecycle 156 项断言（open 用例覆盖 reveal argv / 工作区根 / 越界 / 缺失 / 未跟踪）；渲染冒烟断言应用下拉**不存在**、工具栏与全选/反选存在。
 
 ### 0.3.0（资源打开：文件管理器 / 自选应用 + 弹窗显示修复）
 

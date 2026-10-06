@@ -471,15 +471,10 @@
   border-radius: var(--dsw-radius-md);
 }
 
-.dsm-resAppSelect {
-  flex: 1 1 220px;
-  min-width: 0;
-  padding: 4px 8px;
+.dsm-resToolbarHint {
   font-size: 12px;
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-label-secondary);
+  margin-right: auto;
 }
 
 .dsm-resCheck {

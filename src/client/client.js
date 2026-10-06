@@ -41,8 +41,7 @@ function createApi(ctx) {
     getConfig: () => call('config', {}),
     resources: id => call('resources', { id }),
     cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
-    openResource: (id, path, app) => call('openResource', { id, path, app }),
-    listApplications: () => call('listApplications', {}),
+    openResource: (id, path) => call('openResource', { id, path }),
   }
 }
 
@@ -146,16 +145,7 @@ function createManagerStore() {
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
       // resource detail modal (0.2.x): one open detail at a time; the modal
       // owns its app-picker selection, scanned app list and batch selection
-      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, apps: [], platform: '', app: '', selected: [], busy: false } },
-      setDetailApps: (draft, apps, platform) => {
-        if (draft.detail !== null) {
-          draft.detail.apps = apps
-          draft.detail.platform = typeof platform === 'string' ? platform : draft.detail.platform
-        }
-      },
-      setDetailApp: (draft, app) => {
-        if (draft.detail !== null) draft.detail.app = app
-      },
+      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false } },
       toggleDetailSelect: (draft, key) => {
         if (draft.detail === null) return
         draft.detail.selected = draft.detail.selected.includes(key)
@@ -271,10 +261,9 @@ function createController({ ctx, api, instance }) {
   async function openResources(id) {
     const seq = ++detailSeq
     instance.actions.openDetail(id)
-    const [resources, status, applications] = await Promise.all([
+    const [resources, status] = await Promise.all([
       api.resources(id),
       api.cleanupStatus(id).catch(() => null),
-      api.listApplications().catch(() => null),
     ])
     if (seq !== detailSeq) return
     if (resources?.ok === true) {
@@ -285,14 +274,11 @@ function createController({ ctx, api, instance }) {
       return
     }
     if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
-    if (applications?.ok === true && Array.isArray(applications.value?.applications)) {
-      instance.actions.setDetailApps(applications.value.applications, applications.value.platform)
-    }
   }
 
-  /** Open one resource: reveal in the file manager or launch the chosen app. */
-  async function openOne(sessionId, path, app) {
-    const result = await api.openResource(sessionId, path, app === '' ? undefined : app)
+  /** Open one resource: reveal it in the OS file manager. */
+  async function openOne(sessionId, path) {
+    const result = await api.openResource(sessionId, path)
     if (result?.ok !== true) {
       const message = formatError(result?.error)
       console.warn('[dsh-session-manager] openResource failed:', describeError(result?.error))
@@ -312,7 +298,7 @@ function createController({ ctx, api, instance }) {
     instance.actions.setDetailBusy(true)
     let failures = 0
     for (const row of targets) {
-      const opened = await openOne(detail.id, row.identifier, detail.app)
+      const opened = await openOne(detail.id, row.identifier)
       if (opened !== true) failures += 1
     }
     instance.actions.setDetailBusy(false)
@@ -326,9 +312,8 @@ function createController({ ctx, api, instance }) {
   async function openWorkspace() {
     const detail = instance.getSnapshot().detail
     if (detail === null) return
-    // '.' resolves host-side to the session workspace (guarded to the cwd);
-    // with an app selected the workspace opens in that app instead
-    await openOne(detail.id, '.', detail.app)
+    // '.' resolves host-side to the session workspace root (guarded to the cwd)
+    await openOne(detail.id, '.')
   }
 
   function dispose() {
@@ -349,11 +334,6 @@ function rowKeyOf(row) {
 /** Path-shaped resources can be opened/revealed; env vars and processes cannot. */
 const OPENABLE_TYPES = new Set(['file', 'configuration', 'download', 'directory', 'dependency'])
 
-/** The default "open" target is the OS file manager of THIS computer. */
-function fileManagerName(platform, t) {
-  const key = platform === 'darwin' ? 'res.fm.darwin' : platform === 'win32' ? 'res.fm.win32' : 'res.fm.linux'
-  return t(key)
-}
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -665,18 +645,9 @@ function ResourcesModal({ detail, actions, controller, t }) {
         data.tracked === false && h('p', { key: 'legacy', className: 'dsm-resHint' }, t('res.legacy')),
         data.tracked === true && resources.length === 0 && h('p', { key: 'empty', className: 'dsm-resHint' }, t('res.empty')),
 
-        // open toolbar: app picker (default = OS file manager reveal) + batch
+        // open toolbar: everything opens in the OS file manager (the only method)
         tracked && openableRows.length > 0 && h('div', { key: 'toolbar', className: 'dsm-resToolbar' },
-          h('select', {
-            key: 'app',
-            className: 'dsm-resAppSelect',
-            value: detail.app,
-            onChange: event => actions.setDetailApp(event.target.value),
-            'aria-label': t('res.appLabel'),
-          },
-            h('option', { key: 'default', value: '' }, t('res.appDefault', { name: fileManagerName(detail.platform, t) })),
-            detail.apps.map(name => h('option', { key: name, value: name }, name)),
-          ),
+          h('span', { key: 'hint', className: 'dsm-resToolbarHint' }, t('res.fileManagerHint')),
           h(Button, { key: 'ws', variant: 'ghost', size: 'sm', disabled: detail.busy === true, onClick: () => void controller.openWorkspace() }, t('res.openWorkspace')),
           h(Button, {
             key: 'selectAll',
@@ -735,7 +706,7 @@ function ResourcesModal({ detail, actions, controller, t }) {
                       size: 'sm',
                       'aria-label': t('res.open'),
                       disabled: detail.busy === true,
-                      onClick: () => void controller.openOne(detail.id, row.identifier, detail.app),
+                      onClick: () => void controller.openOne(detail.id, row.identifier),
                     }, t('res.open')),
                   ),
                 )
