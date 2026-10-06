@@ -18,7 +18,10 @@
 //   cleanup       { ids, mode }         -> 'rollback-only' | 'resume' | 'full'
 //   track         { ids }               -> run one diff pass now (ops/debug)
 //   openResource  { id, path }          -> reveal in the OS file manager
-//   deleteResources { id, paths }       -> move resources to the OS wastebasket
+//   deleteResources { id, paths }       -> copy into the plugin recycle bin,
+//                                          then move to the OS wastebasket
+//   recycleList    { id? }              -> plugin recycle bin entries
+//   recycleRestore { entryId }          -> restore a bin entry to its original path
 //
 // Every handler returns `{ ok: true, value }` or `{ ok: false, error }`;
 // batch endpoints take a single `ids` array so one RPC covers both the
@@ -537,6 +540,33 @@ export function apply(ctx, config) {
         } catch (error) {
           logger?.warn?.(`[dsh-session-manager] deleteResources failed: ${error?.message ?? error}`)
           return fail('internal', error?.message ?? 'delete-resources-failed')
+        }
+      },
+    },
+    recycleList: {
+      handle: async (payload) => {
+        const id = typeof payload?.id === 'string' && payload.id !== '' ? payload.id : null
+        try {
+          const entries = await resourceManager.recycleList(id)
+          return { ok: true, value: { entries } }
+        } catch (error) {
+          logger?.warn?.(`[dsh-session-manager] recycleList failed: ${error?.message ?? error}`)
+          return fail('internal', error?.message ?? 'recycle-list-failed')
+        }
+      },
+    },
+    recycleRestore: {
+      audit: true,
+      handle: async (payload) => {
+        const entryId = typeof payload?.entryId === 'string' ? payload.entryId : ''
+        if (entryId === '') return fail('no-entry-id', 'an entry id is required')
+        try {
+          const entry = await resourceManager.recycleRestore(entryId)
+          return { ok: true, value: { entryId, originalPath: entry.originalPath, sessionId: entry.sessionId } }
+        } catch (error) {
+          const code = error?.code ?? 'restore-failed'
+          logger?.warn?.(`[dsh-session-manager] recycleRestore ${entryId} failed: ${error?.message ?? error}`)
+          return fail(code, error?.message ?? 'restore-failed')
         }
       },
     },

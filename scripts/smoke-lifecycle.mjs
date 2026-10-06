@@ -1115,6 +1115,55 @@ function forceBoot() {
   removeSessionFromCorpus(id)
 }
 
+{
+  // 插件内回收站：删除 = 双写（插件回收站 + 系统废纸篓），恢复 = 从回收站还原
+  const id = 'session-bin'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'orig.txt'), 'bin-content-42')
+  mkdirSync(join(cwd, 'mydir'), { recursive: true })
+  writeFileSync(join(cwd, 'mydir', 'x.txt'), 'inner-x')
+  await call(dispatch, 'track', { ids: [id] })
+  const result = await call(dispatch, 'deleteResources', { id, paths: ['orig.txt', 'mydir'] })
+  ok(result.value.results.every(entry => entry.ok === true), `bin: both trashed (got ${JSON.stringify(result.value.results)})`)
+  ok(!existsSync(join(cwd, 'orig.txt')) && !existsSync(join(cwd, 'mydir')), 'bin: gone from the workspace')
+  // 双写之插件内回收站：内容 + 元数据完好
+  const binDir = join(home, 'dsh-session-manager', 'recycle')
+  const entries = JSON.parse(readFileSync(join(binDir, 'index.json'), 'utf8')).entries
+  const sessionEntries = entries.filter(entry => entry.sessionId === id)
+  ok(sessionEntries.length === 2, `bin: index has 2 entries for this session (got ${sessionEntries.length})`)
+  const fileEntry = sessionEntries.find(entry => entry.originalPath === 'orig.txt')
+  ok(fileEntry !== undefined && fileEntry.sessionId === id, 'bin: entry records session + original path')
+  ok(readFileSync(join(binDir, fileEntry.entryId, 'payload', 'orig.txt'), 'utf8') === 'bin-content-42', 'bin: file content preserved')
+  // RPC：列表按会话过滤
+  const list = await call(dispatch, 'recycleList', { id })
+  ok(list.value.entries.length === 2, `bin: recycleList returns the session's entries (got ${list.value.entries.length})`)
+  // 恢复：从插件回收站还原到原位，系统废纸篓副本清除
+  writeFileSync(join(process.env.DSH_SM_TRASH_DIR, 't.txt'), 'os copy') // 走 rename 时 trashPath 可知
+  const restored = await call(dispatch, 'recycleRestore', { entryId: fileEntry.entryId })
+  ok(restored.ok === true && restored.value?.entryId === fileEntry.entryId, `bin: restore ok (got ${JSON.stringify(restored)})`)
+  ok(readFileSync(join(cwd, 'orig.txt'), 'utf8') === 'bin-content-42', 'bin: file restored to the original position with original content')
+  ok(existsSync(join(process.env.DSH_SM_TRASH_DIR, 'orig.txt')) === false, 'bin: OS-trash copy of orig.txt removed on restore')
+  ok(JSON.parse(readFileSync(join(binDir, 'index.json'), 'utf8')).entries.filter(entry => entry.sessionId === id).length === 1, 'bin: restored entry consumed from the index (dir entry remains)')
+  // 目录条目恢复
+  const dirEntry = entries.find(entry => entry.originalPath === 'mydir')
+  const dirRestored = await call(dispatch, 'recycleRestore', { entryId: dirEntry.entryId })
+  ok(dirRestored.ok === true, `bin: directory restore ok (got ${JSON.stringify(dirRestored)})`)
+  ok(readFileSync(join(cwd, 'mydir', 'x.txt'), 'utf8') === 'inner-x', 'bin: directory entry restored as a tree')
+  // 目标已存在 → 不覆盖
+  writeFileSync(join(cwd, 'orig.txt'), 'user data now')
+  mkdirSync(join(binDir, fileEntry.entryId, 'payload'), { recursive: true })
+  writeFileSync(join(binDir, fileEntry.entryId, 'payload', 'orig.txt'), 'bin-content-42')
+  writeFileSync(join(binDir, 'index.json'), JSON.stringify({ entries: [fileEntry] }))
+  const conflict = await call(dispatch, 'recycleRestore', { entryId: fileEntry.entryId })
+  ok(conflict.ok === false && conflict.error?.code === 'target-exists', `bin: restore refuses to overwrite an existing target (got ${JSON.stringify(conflict)})`)
+  ok(readFileSync(join(cwd, 'orig.txt'), 'utf8') === 'user data now', 'bin: existing target untouched')
+  // entryId 穿越
+  const evil = await call(dispatch, 'recycleRestore', { entryId: '../evil' })
+  ok(evil.ok === false, 'bin: entryId traversal rejected')
+  removeSessionFromCorpus(id)
+}
+
 // --- dispose -----------------------------------------------------------------------
 // exercise the real unload path (store flush + timer teardown) on every instance
 for (const app of allApps) {

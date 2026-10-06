@@ -34,6 +34,7 @@ import { createSnapshotStore } from './snapshots.js'
 import { createBaselineStore, baselineStateMap, DEFAULT_EXCLUDES } from './baseline.js'
 import { createCleanupEngine, createCleanupStateStore, lockIsBusy } from './cleanup.js'
 import { createDefaultTrackers } from './trackers/index.js'
+import { createRecycleBin } from './recycle.js'
 import {
   nodeModulesAdapter, createDependencyTracker,
   serializeDepSnapshot, deserializeDepSnapshot,
@@ -114,6 +115,8 @@ function clampNumber(value, min, max, fallback) {
  * @param {object} [opts.logger]
  */
 export function createSessionResourceManager({ dshHome, ctx, manifest, opener, trash, getConfig, logger }) {
+  void logger
+  const recycle = createRecycleBin({ rootDir: join(dshHome, 'dsh-session-manager', 'recycle'), logger })
   const trackingRoot = join(dshHome, 'dsh-session-manager', 'tracking')
   const runtimes = new Map() // sessionId → runtime
   const baselineJobs = new Map() // sessionId → in-flight capture promise
@@ -994,14 +997,28 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
         continue
       }
       try {
+        // 双写：先复制进插件内回收站（内容+元数据），再移入系统废纸篓。
+        // 复制失败 → 不动文件，逐条报错。
+        const entry = await recycle.put({ sessionId, workspaceCwd: cwd, relativePath, trashPath: null })
         const trashed = await trash.moveToTrash(absolute)
-        results.push({ path: relativePath, ok: true, via: trashed.via, trashPath: trashed.trashPath ?? null })
+        await recycle.noteTrashPath(entry.entryId, trashed.trashPath ?? null).catch(() => {})
+        results.push({ path: relativePath, ok: true, via: trashed.via, entryId: entry.entryId })
       } catch (error) {
         logger?.warn?.(`[dsh-session-manager] trash ${relativePath} failed: ${error?.message ?? error}`)
         results.push({ path: relativePath, ok: false, error: { code: error?.code ?? 'trash-failed', message: error?.message ?? 'trash-failed' } })
       }
     }
     return { results }
+  }
+
+  /** 插件内回收站条目（可选按会话过滤）。 */
+  async function recycleList(sessionId = null) {
+    return recycle.list(sessionId)
+  }
+
+  /** 从插件内回收站还原到原位，并移除系统废纸篓中的已知副本。 */
+  async function recycleRestore(entryId) {
+    return recycle.restore(entryId)
   }
 
   /** Cleanup status for the RPC layer. */
@@ -1144,6 +1161,8 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
     cleanupSession,
     openResource,
     deleteResources,
+    recycleList,
+    recycleRestore,
     sweepKnownSessions,
     isTracked,
     cancelPendingCleanup,

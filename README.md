@@ -111,7 +111,9 @@ host 半经 `/dsh-session-manager` 通道服务（批量端点接受 `ids` 数�
 | `cleanup` | `{ ids, mode }` | `rollback-only`（回滚资源保留会话）/ `resume` / `full` | **0.2.0** |
 | `track` | `{ ids }` | 立即执行一次 diff（运维 / 调试） | **0.2.0** |
 | `openResource` | `{ id, path }` | 在本机文件管理器中显示会话资源（访达定位 / 资源管理器选中）；路径仅限该会话工作区内 | **0.3.0** |
-| `deleteResources` | `{ id, paths }` | 将会话资源**移入本机废纸篓**（可恢复）；路径仅限该会话工作区内，逐条返回结果 | **0.4.0** |
+| `deleteResources` | `{ id, paths }` | 将会话资源**移入本机废纸篓**（先双写到插件回收站）；路径仅限该会话工作区内，逐条返回结果 | **0.4.0** |
+| `recycleList` | `{ id? }` | 插件内回收站条目（可按会话过滤） | **0.4.1** |
+| `recycleRestore` | `{ entryId }` | 从插件回收站还原到原位，并清除系统废纸篓中的已知副本 | **0.4.1** |
 
 `delete` / `purge` / `restore` 返回值新增可选 `cleanup` / `journalRemoved` 字段——旧客户端忽略即可。
 
@@ -140,6 +142,7 @@ host 半经 `/dsh-session-manager` 通道服务（批量端点接受 `ids` 数�
 
 - `$DSH_HOME/dsh-session-manager-deleted.json` — 回收站清单（`{id, title, cwd, deletedAt, wasArchived, purged}`；`purged` 是重启后仍生效的墓碑标记）。
 - `$DSH_HOME/dsh-session-manager-titles.json` — 会话标题缓存（含负缓存；实时会话经 `session/title` 事件保持最新）。
+- `$DSH_HOME/dsh-session-manager/recycle/` — 插件内回收站（`index.json` 索引 + `<entryId>/{meta.json,payload/}` 内容），0700 权限（0.4.1）。
 - `$DSH_HOME/dsh-session-manager/tracking/<id>/` — 每会话的 `baseline.json` / `changes.jsonl` / `cleanup.json` / `activity.json`（会话活动时钟）/ `snapshots/`（0.2.0+；目录以 0700 创建，快照含文件内容，随 Journal 一并销毁）。
 
 以上文件都由插件自维护；tracking 目录在清理验证完成后随 Journal 一起删除，卸载插件后可手动删除其余文件。
@@ -243,6 +246,14 @@ node scripts/smoke-lifecycle.mjs     # 资源生命周期冒烟：Case 1-10 + �
 - **打开资源**：仅调用本机文件管理器——macOS `open -R`（访达定位）、Windows `explorer /select`（资源管理器选中）、Linux `xdg-open`（打开父目录）；所有 spawn 均为 argv 数组（无 shell 拼接），可打开路径严格限制在会话工作区内。
 
 ## 变更记录
+
+### 0.4.1（插件内回收站：删除双写 + 恢复到原位）
+
+- **新增插件内回收站**（`lifecycle/recycle.js` + `$DSH_HOME/dsh-session-manager/recycle/`）：用户从资源弹窗删除的文件/目录先复制到回收站（内容 + 元数据），再移入系统废纸篓。恢复时从回收站写回原位并清除废纸篓副本。
+- `deleteResources` 现为**双写**：先复制到插件回收站（0700 权限），再移入系统废纸篓。复制失败则不动文件。
+- 新增 RPC `recycleList { id? }` / `recycleRestore { entryId }`：恢复时写回原位（目标已存在则拒绝覆盖）、SHA-256 校验、清除废纸篓已知副本。
+- 资源弹窗新增回收站区块（当前会话的条目 + 恢复按钮）。
+- 测试：`smoke-lifecycle.mjs` 增至 **332 项断言**（新增：双写、按会话列表、恢复到原位含目录树、目标已存在拒绝、entryId 穿越拒绝）；真机复验：`deleteResources` → `recycleList` → `recycleRestore` 全链路通过。
 
 ### 0.4.0（资源删除：移入废纸篓 + 弹窗批量删除）
 
