@@ -659,6 +659,13 @@ function ResourcesModal({ detail, actions, controller, t }) {
             onClick: () => actions.setDetailSelected(openableRows.map(row => rowKeyOf(row)).filter(key => detail.selected.includes(key) === false)),
           }, t('res.invert')),
           h(Button, {
+            key: 'clear',
+            variant: 'ghost',
+            size: 'sm',
+            disabled: detail.selected.length === 0,
+            onClick: () => actions.setDetailSelected([]),
+          }, t('res.clearSelected')),
+          h(Button, {
             key: 'batch',
             variant: 'ghost',
             size: 'sm',

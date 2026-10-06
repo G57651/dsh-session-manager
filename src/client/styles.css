@@ -477,6 +477,19 @@
   display: flex;
   flex: none;
   align-items: center;
+  max-width: 32px;
+}
+
+/* Keep the checkbox's accessible label but hide its visible text: the path
+   column next to it already identifies the row. Without this the long label
+   swallows the whole row width and squeezes the path into a sliver. */
+.dsm-resCheck label > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .dsm-resRowSelected {
