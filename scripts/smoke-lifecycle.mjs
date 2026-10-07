@@ -1568,6 +1568,79 @@ function forceBoot() {
   removeSessionFromCorpus(id)
 }
 
+// --- 跨会话隔离：操作 A 不得影响 B 的工作区/日志/回收站 ----------------------------
+{
+  const idA = 'session-iso-a'
+  const idB = 'session-iso-b'
+  const cwdA = makeSession(idA)
+  const cwdB = makeSession(idB)
+  await call(dispatch, 'track', { ids: [idA] })
+  await call(dispatch, 'track', { ids: [idB] })
+  // 两边同名的相对路径：任何按相对路径找错工作区的实现都会在这里露馅
+  writeFileSync(join(cwdA, 'same.txt'), 'A-content')
+  writeFileSync(join(cwdB, 'same.txt'), 'B-content')
+  await call(dispatch, 'track', { ids: [idA, idB] })
+
+  const del = await call(dispatch, 'deleteResources', { id: idA, paths: ['same.txt'] })
+  const entryId = del.value.results[0]?.entryId
+  ok(del.value.results[0]?.ok === true, 'iso: A deletes its own file')
+  ok(!existsSync(join(cwdA, 'same.txt')), 'iso: A 的 same.txt 已删除')
+  ok(existsSync(join(cwdB, 'same.txt')) && readFileSync(join(cwdB, 'same.txt'), 'utf8') === 'B-content', 'iso: B 的同名文件原封不动')
+
+  // 恢复必须回到 A 的工作区，且不得碰 B
+  const restored = await call(dispatch, 'recycleRestore', { entryId })
+  ok(restored.ok === true, 'iso: restore ok')
+  ok(readFileSync(join(cwdA, 'same.txt'), 'utf8') === 'A-content', 'iso: 恢复到 A 的工作区且内容正确')
+  ok(readFileSync(join(cwdB, 'same.txt'), 'utf8') === 'B-content', 'iso: 恢复没有覆盖 B 的同名文件')
+
+  // 视图/日志/清理都必须各归各
+  const rowsA = (await call(dispatch, 'resources', { id: idA })).value.resources
+  const rowsB = (await call(dispatch, 'resources', { id: idB })).value.resources
+  ok(rowsA.some(row => row.identifier === 'same.txt'), 'iso: A 的视图列出自己的文件')
+  ok(rowsB.some(row => row.identifier === 'same.txt'), 'iso: B 的视图列出自己的文件')
+  const journalA = read(join(trackingDir(idA), 'changes.jsonl')) ?? ''
+  const journalB = read(join(trackingDir(idB), 'changes.jsonl')) ?? ''
+  ok(journalA.includes(idB) === false && journalB.includes(idA) === false, 'iso: 日志不互相串会话')
+  ok(journalA !== journalB, 'iso: 两个会话的日志相互独立')
+
+  // B 的清理不得删掉 A 的文件
+  await call(dispatch, 'cleanup', { ids: [idB], mode: 'rollback-only' })
+  ok(readFileSync(join(cwdA, 'same.txt'), 'utf8') === 'A-content', 'iso: B 的清理没有动 A 的文件')
+  ok(existsSync(trackingDir(idA)), 'iso: B 的清理没有销毁 A 的跟踪目录')
+
+  // 回收站条目各归各
+  await call(dispatch, 'deleteResources', { id: idB, paths: ['same.txt'] })
+  const listA = await call(dispatch, 'recycleList', { id: idA })
+  const listB = await call(dispatch, 'recycleList', { id: idB })
+  ok(listA.value.entries.every(entry => entry.sessionId === idA), 'iso: A 的回收站只列 A 的条目')
+  ok(listB.value.entries.every(entry => entry.sessionId === idB), 'iso: B 的回收站只列 B 的条目')
+
+  removeSessionFromCorpus(idA)
+  removeSessionFromCorpus(idB)
+}
+
+// --- 同工作区双会话：不得把另一会话后来创建的文件当成自己的删除掉 ------------------
+{
+  const idA = 'session-shared-a'
+  const idB = 'session-shared-b'
+  const cwd = join(home, 'workspaces', 'shared-ws')
+  makeSessionDir(idA, 'shared-ws')
+  makeSessionDir(idB, 'shared-ws')
+  // 空闲窗口设成 1ms：B 的最终 diff 一定落在「会话安静很久之后」的保守分支
+  const shared = bootWith({ trackingIdleWindowMs: 1 })
+  await call(shared.dispatch, 'track', { ids: [idA, idB] })
+  writeFileSync(join(cwd, 'by-a.txt'), 'A 创建的文件')
+  await call(shared.dispatch, 'track', { ids: [idA] })
+
+  // B 从未创建过这个文件，只是它的工作区里出现了
+  const del = await call(shared.dispatch, 'delete', { ids: [idB] })
+  ok(del.value.results[0]?.ok === true, 'shared: B 删除成功')
+  ok(existsSync(join(cwd, 'by-a.txt')) && readFileSync(join(cwd, 'by-a.txt'), 'utf8') === 'A 创建的文件', 'shared: B 的清理保守保留了 A 创建的文件（疑似外部变更分支）')
+
+  removeSessionFromCorpus(idA)
+  removeSessionFromCorpus(idB)
+}
+
 // --- OS 废纸篓 helper：成败以结果判定（helper 退出码不可信） -----------------------
 {
   const { createTrash } = await import(new URL('../lifecycle/trash.js', import.meta.url).href)
