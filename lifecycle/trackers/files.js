@@ -161,6 +161,16 @@ export function createFileTracker({ cwd, state, baselineDirs = [], sessionStarte
 
       return changes
     },
+
+    /**
+     * Drop a path from the last-known state. Used when something other than
+     * this tracker has already recorded the removal (a user-initiated trash
+     * writes its own journal record), so the next diff does not journal the
+     * same removal a second time.
+     */
+    forget(relativePath) {
+      state.delete(String(relativePath))
+    },
   }
 
   /**

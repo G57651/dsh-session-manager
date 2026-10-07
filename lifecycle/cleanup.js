@@ -471,6 +471,16 @@ export function createCleanupEngine({ trackingDir, sessionId, stateStore, journa
         continue
       }
 
+      // A path the user removed THEMSELVES through the resource view: it sits in
+      // the plugin recycle bin (and the OS wastebasket) by the user's own
+      // decision, so rolling the workspace back would resurrect something they
+      // deleted on purpose. Deliberate preserve, recoverable from the bin.
+      if (last.record.metadata?.trashed === true) {
+        actions.push({ phase: 'path', path, outcome: 'skipped', reason: 'user-trashed' })
+        preserved.add(path)
+        continue
+      }
+
       if (isSuspectFinalDiff(last.record) === true) {
         if (conflictMode === 'force') {
           // explicit user decision: execute the rollback anyway, conflict on record

@@ -1164,6 +1164,54 @@ function forceBoot() {
   removeSessionFromCorpus(id)
 }
 
+{
+  // 用户在资源页删除文件后：资源视图不再把它当普通资源（status=trashed），
+  // 下次 diff 不重复记录；从回收站恢复后行回归；会话清理不复活用户主动删除的内容
+  const id = 'session-usrtrash'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'usr.txt'), 'user deleted me')
+  await call(dispatch, 'track', { ids: [id] })
+
+  let resources = await call(dispatch, 'resources', { id })
+  let row = resources.value.resources.find(entry => entry.identifier === 'usr.txt')
+  ok(row !== undefined && row.status !== 'trashed', `usertrash: file starts as an ordinary resource (got ${row?.status})`)
+
+  const del = await call(dispatch, 'deleteResources', { id, paths: ['usr.txt'] })
+  const entryId = del.value.results[0]?.entryId
+  ok(del.value.results[0]?.ok === true, 'usertrash: file moved to the bin')
+  ok(!existsSync(join(cwd, 'usr.txt')), 'usertrash: gone from the workspace')
+
+  resources = await call(dispatch, 'resources', { id })
+  row = resources.value.resources.find(entry => entry.identifier === 'usr.txt')
+  ok(row !== undefined && row.status === 'trashed', `usertrash: view reports it as trashed (got ${row?.status})`)
+  ok(row.trashed === true && row.binEntryId === entryId, 'usertrash: row carries the trashed flag + bin entry id')
+
+  // tracker 已遗忘该路径 → 下次 diff 不会把这个删除再记一次
+  const changesBefore = (await call(dispatch, 'changes', { id })).value.total
+  await call(dispatch, 'track', { ids: [id] })
+  const changesAfter = (await call(dispatch, 'changes', { id })).value.total
+  ok(changesAfter === changesBefore, `usertrash: the next diff does not journal the removal twice (${changesBefore} → ${changesAfter})`)
+
+  // 恢复 → 文件回到原位 + 行不再标记为 trashed（不靠 diff：文件真的回到磁盘上）
+  await call(dispatch, 'recycleRestore', { entryId })
+  resources = await call(dispatch, 'resources', { id })
+  row = resources.value.resources.find(entry => entry.identifier === 'usr.txt')
+  ok(row !== undefined && row.status !== 'trashed', `usertrash: restoring revives the resource row (got ${row?.status})`)
+  ok(readFileSync(join(cwd, 'usr.txt'), 'utf8') === 'user deleted me', 'usertrash: content restored to the original path')
+
+  // 用户再删一次，然后触发会话清理：cleanup 不得复活用户主动删除的文件
+  await call(dispatch, 'deleteResources', { id, paths: ['usr.txt'] })
+  ok(!existsSync(join(cwd, 'usr.txt')), 'usertrash: file trashed again before cleanup')
+  const cleanup = await call(dispatch, 'cleanup', { ids: [id], mode: 'rollback-only' })
+  ok(cleanup.value.results[0]?.ok === true, 'usertrash: cleanup ok')
+  ok(!existsSync(join(cwd, 'usr.txt')), 'usertrash: cleanup did NOT resurrect the user-trashed file')
+  const trashed = cleanup.value.results[0]?.actions?.find(action => action.reason === 'user-trashed')
+  ok(trashed !== undefined && trashed.outcome === 'skipped', 'usertrash: cleanup reports the path as a preserved user-trashed skip')
+
+  removeSessionFromCorpus(id)
+}
+
 // --- dispose -----------------------------------------------------------------------
 // exercise the real unload path (store flush + timer teardown) on every instance
 for (const app of allApps) {

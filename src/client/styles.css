@@ -496,3 +496,9 @@
   background: var(--dsw-alias-interactive-bg-hover);
   border-radius: var(--dsw-radius-sm);
 }
+
+.dsm-resBinSection {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  margin-top: 8px;
+  padding-top: 8px;
+}

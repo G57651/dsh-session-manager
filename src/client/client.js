@@ -43,6 +43,8 @@ function createApi(ctx) {
     cleanupStatus: id => call('cleanupStatus', { ids: [id] }),
     openResource: (id, path) => call('openResource', { id, path }),
     deleteResources: (id, paths) => call('deleteResources', { id, paths }),
+    recycleList: id => call('recycleList', { id }),
+    recycleRestore: entryId => call('recycleRestore', { entryId }),
   }
 }
 
@@ -146,7 +148,7 @@ function createManagerStore() {
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
       // resource detail modal (0.2.x): one open detail at a time; the modal
       // owns its batch selection (open actions go through the OS file manager)
-      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false } },
+      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false, bin: [] } },
       toggleDetailSelect: (draft, key) => {
         if (draft.detail === null) return
         draft.detail.selected = draft.detail.selected.includes(key)
@@ -168,6 +170,9 @@ function createManagerStore() {
       setDetailStatus: (draft, status) => {
         if (draft.detail !== null) draft.detail.status = status
       },
+      setDetailBin: (draft, entries) => {
+        if (draft.detail !== null) draft.detail.bin = entries
+      },
       setDetailError: (draft, message) => {
         if (draft.detail !== null) {
           draft.detail.loading = false
@@ -183,7 +188,11 @@ function createManagerStore() {
 // Controller — data loading, event subscription, mutation plumbing
 // ---------------------------------------------------------------------------
 
-function createController({ ctx, api, instance }) {
+function createController({ ctx, api, instance, extendSuppression }) {
+  // notices are composed here, so the controller needs its own translator
+  // binding — referencing the outer apply() binding is a ReferenceError at the
+  // moment a notice is raised (every delete/open failure path in the modal)
+  const t = ctx.locale.bind(NS)
   let loadSeq = 0
   let detailSeq = 0
   let refreshTimer
@@ -229,6 +238,12 @@ function createController({ ctx, api, instance }) {
 
   /** Run one mutation endpoint, refresh, and surface partial failures. */
   async function runOp(name, ids, t) {
+    // Archiving/deleting the active session makes the host start a fresh one
+    // and flip to its Conversation page; open a suppression window so the
+    // panelInfo subscription reverts that flip and keeps the user here.
+    if (typeof extendSuppression === 'function' && (name === 'archive' || name === 'deleteSoft' || name === 'purge')) {
+      extendSuppression(2000)
+    }
     const result = await api[name](ids)
     if (result?.ok !== true) {
       console.warn(`[dsh-session-manager] ${name} failed:`, describeError(result?.error), result?.error?.details ?? '')
@@ -262,9 +277,10 @@ function createController({ ctx, api, instance }) {
   async function openResources(id) {
     const seq = ++detailSeq
     instance.actions.openDetail(id)
-    const [resources, status] = await Promise.all([
+    const [resources, status, bin] = await Promise.all([
       api.resources(id),
       api.cleanupStatus(id).catch(() => null),
+      api.recycleList(id).catch(() => null),
     ])
     if (seq !== detailSeq) return
     if (resources?.ok === true) {
@@ -275,6 +291,9 @@ function createController({ ctx, api, instance }) {
       return
     }
     if (status?.ok === true) instance.actions.setDetailStatus(status.value?.results?.[0] ?? null)
+    // the bin is this session's own deleted resources: a failed call leaves the
+    // section empty rather than blocking the rest of the modal
+    if (bin?.ok === true) instance.actions.setDetailBin(Array.isArray(bin.value?.entries) ? bin.value.entries : [])
   }
 
   /** Open one resource: reveal it in the OS file manager. */
@@ -332,20 +351,46 @@ function createController({ ctx, api, instance }) {
     const detail = instance.getSnapshot().detail
     if (detail === null || detail.busy === true) return
     const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
-    const targets = detail.selected.map(key => rowsByKey.get(key)).filter(row => row !== undefined && OPENABLE_TYPES.has(row.resourceType))
+    const targets = detail.selected
+      .map(key => ({ key, row: rowsByKey.get(key) }))
+      .filter(entry => entry.row !== undefined && OPENABLE_TYPES.has(entry.row.resourceType))
     if (targets.length === 0) return
     instance.actions.setDetailBusy(true)
-    let failures = 0
-    for (const row of targets) {
-      const ok = await deleteOne(detail.id, row.identifier)
-      if (ok !== true) failures += 1
+    const failedKeys = []
+    try {
+      for (const { key, row } of targets) {
+        const ok = await deleteOne(detail.id, row.identifier)
+        if (ok !== true) failedKeys.push(key)
+      }
+    } finally {
+      // the paths are already off disk, so the list must re-read no matter how
+      // the loop ended — skipping this leaves deleted rows on screen
+      instance.actions.setDetailBusy(false)
+      await openResources(detail.id).catch(() => {})
     }
+    if (failedKeys.length > 0) {
+      // keep the failures selected so a second click retries exactly them
+      instance.actions.setDetailSelected(failedKeys)
+      return
+    }
+    instance.actions.setNotice({ tone: 'info', text: t('res.batchDeleted', { n: targets.length }) })
+  }
+
+  /** Restore one recycle-bin entry to its original workspace position. */
+  async function restoreBin(entryId) {
+    const detail = instance.getSnapshot().detail
+    if (detail === null || detail.busy === true) return false
+    instance.actions.setDetailBusy(true)
+    const result = await api.recycleRestore(entryId)
     instance.actions.setDetailBusy(false)
-    if (failures === 0) {
-      instance.actions.setNotice({ tone: 'info', text: t('res.batchDeleted', { n: targets.length }) })
-      instance.actions.setDetailSelected([])
+    if (result?.ok !== true) {
+      console.warn('[dsh-session-manager] recycleRestore failed:', describeError(result?.error))
+      instance.actions.setNotice({ tone: 'error', text: t('res.restoreFailed', { reason: formatError(result?.error) }) })
+      return false
     }
-    await openResources(detail.id) // statuses changed — refresh the modal
+    instance.actions.setNotice({ tone: 'info', text: t('res.restored', { name: result.value?.originalPath ?? '' }) })
+    await openResources(detail.id).catch(() => {})
+    return true
   }
 
   /** Reveal the session workspace itself in the file manager. */
@@ -363,7 +408,7 @@ function createController({ ctx, api, instance }) {
     }
   }
 
-  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteSelected, openWorkspace, dispose }
+  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteOne, deleteSelected, restoreBin, openWorkspace, dispose }
 }
 
 /** Stable per-row key used by the modal's batch selection. */
@@ -610,6 +655,7 @@ const RES_STATUS_KEY = {
   informational: 'res.status.info',
   unknown: 'res.status.unknown',
   unreadable: 'res.status.unreadable',
+  trashed: 'res.status.trashed',
 }
 const RES_CLEANUP_KEY = {
   active: 'res.cleanup.active',
@@ -633,7 +679,7 @@ function statusPill(status, t) {
   const key = RES_STATUS_KEY[status]
   if (key === undefined) return null
   const positive = status === 'matches-baseline' || status === 'present'
-  const negative = status === 'differs-from-baseline' || status === 'missing'
+  const negative = status === 'differs-from-baseline' || status === 'missing' || status === 'trashed'
   return h(Badge, {
     key: 'status',
     label: t(key),
@@ -643,7 +689,13 @@ function statusPill(status, t) {
 
 function ResourcesModal({ detail, actions, controller, t }) {
   const data = detail.data
-  const resources = data?.resources ?? []
+  // A user-trashed resource reads status:'trashed' ONLY while it is really off
+  // disk — the host flips it back to 'present' the moment it is restored (from
+  // the bin or by hand), so this single status check is what hides the row
+  // while trashed and brings it back the instant it returns. Filtering on the
+  // journal's trashed flag instead would hide it forever (restore writes no
+  // new journal record to clear that flag).
+  const resources = (data?.resources ?? []).filter(row => row.status !== 'trashed')
   const groups = new Map()
   for (const row of resources) {
     const type = RES_GROUP_ORDER.includes(row.resourceType) ? row.resourceType : 'other'
@@ -655,6 +707,7 @@ function ResourcesModal({ detail, actions, controller, t }) {
   const conflicts = Array.isArray(detail.status?.cleanup?.conflicts) ? detail.status.cleanup.conflicts : []
   const baseline = data?.baseline ?? null
   const tracked = data?.tracked === true
+  const binEntries = Array.isArray(detail.bin) ? detail.bin : []
 
   return h(Modal, {
     open: true,
@@ -698,13 +751,6 @@ function ResourcesModal({ detail, actions, controller, t }) {
             disabled: openableRows.length === 0,
             onClick: () => actions.setDetailSelected(openableRows.map(row => rowKeyOf(row)).filter(key => detail.selected.includes(key) === false)),
           }, t('res.invert')),
-          h(Button, {
-            key: 'clear',
-            variant: 'ghost',
-            size: 'sm',
-            disabled: detail.selected.length === 0,
-            onClick: () => actions.setDetailSelected([]),
-          }, t('res.clearSelected')),
           h(Button, {
             key: 'batchDelete',
             variant: 'ghost',
@@ -772,6 +818,29 @@ function ResourcesModal({ detail, actions, controller, t }) {
               })),
           )
         }),
+
+        // --- 回收站区块：当前会话被删除的资源，可恢复到原位 ---
+        binEntries.length > 0 && h('div', { key: 'binSection', className: 'dsm-resGroup dsm-resBinSection' },
+          h('div', { className: 'dsm-resGroupTitle' }, `${t('res.binTitle')} · ${binEntries.length}`),
+          h('div', { className: 'dsm-resGroupList' },
+            binEntries.map(entry => h('div', { key: entry.entryId, className: 'dsm-resRow' },
+              h('div', { className: 'dsm-resMain' },
+                h('div', { className: 'dsm-resId' }, entry.originalPath),
+                h('div', { className: 'dsm-resExtra' }, [
+                  entry.type === 'directory' ? t('res.binDir') : null,
+                ].filter(Boolean).join(' · ')),
+              ),
+              h('div', { className: 'dsm-resPills' },
+                h(Button, {
+                  key: 'restore',
+                  variant: 'ghost',
+                  size: 'sm',
+                  disabled: detail.busy === true,
+                  onClick: () => void controller.restoreBin(entry.entryId),
+                }, t('res.restore')),
+              ),
+            ))),
+        ),
       ],
     ),
   )
@@ -885,8 +954,16 @@ function apply(ctx) {
   const instance = handle.create()
   const store = { ...handle, create: () => instance }
 
+  // Archiving/deleting the active session makes the host start a fresh one and
+  // flip the central panel to its Conversation page. The user expects to stay
+  // on this panel unless they navigated away themselves, so operations run
+  // from here open a short suppression window: any panel flip the host drives
+  // inside that window is reverted. Outside the window the user is in charge.
+  let suppressNavigationUntil = 0
+  const extendSuppression = (ms) => { suppressNavigationUntil = Math.max(suppressNavigationUntil, Date.now() + ms) }
+
   const api = createApi(ctx)
-  const controller = createController({ ctx, api, instance })
+  const controller = createController({ ctx, api, instance, extendSuppression })
 
   void (async () => {
     const result = await api.getConfig()
@@ -912,9 +989,16 @@ function apply(ctx) {
       SessionManagerPage,
     )
     // Leaving the panel exits selection mode so a stale selection cannot leak
-    // into the next visit.
+    // into the next visit. A panel flip the host drove as a side effect of an
+    // archive/delete this panel just ran is reverted (see extendSuppression).
     yield ctx.layout.panelInfo.subscribe(() => {
-      if (ctx.layout.panelInfo.getSnapshot().activePanelId !== PANEL_ID) instance.actions.exitSelect()
+      const snapshot = ctx.layout.panelInfo.getSnapshot()
+      if (snapshot.activePanelId !== PANEL_ID) {
+        instance.actions.exitSelect()
+        if (Date.now() < suppressNavigationUntil && typeof ctx.layout.selectPanel === 'function') {
+          try { ctx.layout.selectPanel(PANEL_ID) } catch { /* panel not registered yet — leave it */ }
+        }
+      }
     })
   })
 

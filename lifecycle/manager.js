@@ -27,11 +27,11 @@ import { readdir, rm, stat, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { encodeSegment, decodeSegment } from '../session-manage.js'
 import {
   ACTIONS, OWNERSHIP, RESOURCE_TYPES, CLEANUP_STATES, RESUMABLE_STATES,
-  makeChangeRecord, isInsideRoot, sha256Hex,
+  makeChangeRecord, isInsideRoot, sha256Hex, isConfigurationName,
 } from './types.js'
 import { createChangeJournal, replayPathRecords } from './journal.js'
 import { createSnapshotStore } from './snapshots.js'
-import { createBaselineStore, baselineStateMap, DEFAULT_EXCLUDES } from './baseline.js'
+import { createBaselineStore, baselineStateMap, DEFAULT_EXCLUDES, basenameOf } from './baseline.js'
 import { createCleanupEngine, createCleanupStateStore, lockIsBusy } from './cleanup.js'
 import { createDefaultTrackers } from './trackers/index.js'
 import { createRecycleBin } from './recycle.js'
@@ -869,6 +869,11 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
       row.ownership = record.ownership
       row.lastTimestamp = record.timestamp
       if (record.metadata?.url !== undefined) row.url = record.metadata.url
+      // last record wins: a user-initiated trash is a different thing from an
+      // agent deletion, and the view must keep the two apart
+      row.trashed = record.action === ACTIONS.DELETED && record.metadata?.trashed === true
+      if (row.trashed === true) row.binEntryId = record.metadata?.entryId ?? null
+      else delete row.binEntryId
       rows.set(key, row)
       if (typeof record.resource.to === 'string' && record.resource.to !== '') {
         // moved/renamed: surface the destination as its own row — MERGE when
@@ -889,7 +894,10 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
     // current status per row kind
     for (const row of rows.values()) {
       if (PATH_RESOURCE_TYPES.has(row.resourceType)) {
-        row.status = await pathStatus(cwd, row)
+        const current = await pathStatus(cwd, row)
+        // a user-trashed path only reads as trashed while it is really off
+        // disk: restoring it (from the bin, or by hand) revives the row
+        row.status = row.trashed === true && current === 'missing' ? 'trashed' : current
       } else if (row.resourceType === RESOURCE_TYPES.ENVIRONMENT_VARIABLE) {
         row.status = row.identifier in process.env ? 'present' : 'missing'
       } else if (row.resourceType === RESOURCE_TYPES.DEPENDENCY) {
@@ -983,6 +991,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
       return list.map(path => ({ path, ok: false, error: { code: 'untracked', message: 'this session has no resource baseline (legacy or already cleaned)' } }))
     }
     const cwd = resolve(baseline.cwd)
+    const runtime = await runtimeFor(sessionId)
     const results = []
     for (const relativePath of list) {
       const absolute = resolve(cwd, relativePath)
@@ -1002,6 +1011,7 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
         const entry = await recycle.put({ sessionId, workspaceCwd: cwd, relativePath, trashPath: null })
         const trashed = await trash.moveToTrash(absolute)
         await recycle.noteTrashPath(entry.entryId, trashed.trashPath ?? null).catch(() => {})
+        if (runtime !== null) await noteUserTrash(runtime, relativePath, entry, trashed)
         results.push({ path: relativePath, ok: true, via: trashed.via, entryId: entry.entryId })
       } catch (error) {
         logger?.warn?.(`[dsh-session-manager] trash ${relativePath} failed: ${error?.message ?? error}`)
@@ -1009,6 +1019,26 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
       }
     }
     return { results }
+  }
+
+  /**
+   * Record a user-initiated trash in the journal and drop the path from the
+   * live tracker. Both halves matter: the record is what makes the resource
+   * view stop presenting the path as an ordinary resource (and what keeps
+   * session cleanup from resurrecting something the user deliberately
+   * removed), while forgetting it in the tracker stops the next diff from
+   * journaling the same removal a second time as an agent deletion.
+   */
+  async function noteUserTrash(runtime, relativePath, entry, trashed) {
+    runtime.trackers.file.forget?.(relativePath)
+    await record(runtime, {
+      resourceType: isConfigurationName(basenameOf(relativePath)) ? RESOURCE_TYPES.CONFIGURATION : RESOURCE_TYPES.FILE,
+      action: ACTIONS.DELETED,
+      resource: { path: relativePath },
+      before: null,
+      after: null,
+      metadata: { trashed: true, entryId: entry.entryId, via: trashed?.via ?? null },
+    }).catch(() => {})
   }
 
   /** 插件内回收站条目（可选按会话过滤）。 */
