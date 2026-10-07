@@ -229,12 +229,13 @@ node scripts/smoke-lifecycle.mjs   # 356 项：十场景 + 资源视图 + 回收
 
 ### 0.4.2 — 会话资源删除链路修复 + 归档/删除后页面稳定
 
-- **问题 2/3/4**：`createController` 内 8 处通知路径引用未绑定 `t`，`deleteSelected` 删完文件后在 `t('res.batchDeleted')` 抛 `ReferenceError`，刷新被跳过 → 文件已删但列表仍显示。补 `const t = ctx.locale.bind(NS)`；`deleteSelected` 改 try/finally，刷新不可被通知失败中断；`deleteOne` 未导出 → 行内「删除」点击即 TypeError，补齐导出。
-- **问题 1**：补 `api.recycleList` / `recycleRestore`、`openResources` 并行拉取回收站、`restoreBin` 方法 + 导出。
-- **问题 2 主机侧**：`deleteResources` 写带 `metadata.trashed` 的 `deleted` 日志记录 + `forget` 路径（防重复记录）；`getResources` 标记 `status=trashed`；cleanup 跳过 `user-trashed`，不复活用户主动删除的文件。
-- **问题 5**：客户端过滤只看 `status==='trashed'`（恢复后文件回磁盘 → status 翻回 → 行重现），不再看恒为 true 的 `row.trashed` 日志标志。
+- **问题 1**：会话资源页回收站功能缺失。补 `api.recycleList` / `recycleRestore`、`openResources` 并行拉取回收站、`restoreBin` 方法 + 导出。
+- **问题 2**：删除后资源页不同步。客户端：`deleteSelected` 改 try/finally，刷新不可被通知失败中断（`createController` 补 `const t = ctx.locale.bind(NS)` 修复 8 处通知路径的 `ReferenceError`，详见问题 4）。主机侧：`deleteResources` 写带 `metadata.trashed` 的 `deleted` 日志记录 + `forget` 路径（防重复记录）；`getResources` 标记 `status=trashed`；cleanup 跳过 `user-trashed`，不复活用户主动删除的文件。
+- **问题 3**：批量选择无法批量删除。同问题 4 根因（`deleteSelected` 在 `t('res.batchDeleted')` 抛 `ReferenceError` 中断刷新），绑 `t` + try/finally 后批量链路完整；失败路径保留所选以便重试。
+- **问题 4**：点击删除未实际删除。`createController` 内 8 处通知路径引用未绑定 `t`，`deleteSelected` 删完文件后于 `t('res.batchDeleted')` 抛 `ReferenceError`，刷新被跳过；且 `deleteOne` 未从控制器导出，行内「删除」点击即 `TypeError`，无 RPC 发出。补 `const t = ctx.locale.bind(NS)` + 补齐 `deleteOne` 导出。
+- **问题 5**：从回收站恢复后资源页不显示。客户端过滤改为只看 `status==='trashed'`（恢复后文件回磁盘 → status 翻回 present → 行重现），不再看恒为 true 的 `row.trashed` 日志标志（恢复不写新日志，标志会永久隐藏该行）。
 - **问题 6**：移除「清除选择」按钮与 locale 键（反选已能清空全选）。
-- **问题 7**：归档/删除活跃会话时宿主跳转新会话页 → 插件开 2s 抑制窗口，panelInfo 订阅重选本面板；用户手动切走不干预。
+- **问题 7**：归档/删除活跃会话时宿主跳转新会话页。插件在 `archive` / `deleteSoft` / `purge` 操作期间开 2s 抑制窗口，`panelInfo` 订阅若发现面板被宿主切走且仍在窗口内则 `selectPanel(PANEL_ID)` 重选本面板；用户手动切走（窗口外）不干预。
 
 ### 0.4.1 — 插件内回收站：删除双写 + 恢复到原位
 
