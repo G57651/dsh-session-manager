@@ -36,7 +36,7 @@ const FETCH_TOOL_RE = /fetch|download|web|http|curl|wget/i
 const URL_IN_COMMAND_RE = /\b(?:https?:\/\/[^\s'"<>]+|www\.[^\s'"<>]+)/i
 
 /** Query parameters whose VALUES are credentials, tokens or signatures. */
-const SENSITIVE_PARAM_RE = /^(?:token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|key|secret|client[_-]?secret|password|passwd|credential|auth|authorization|signature|sig|signed|assertion|saml|session|jwt|bearer|code)$/i
+const SENSITIVE_PARAM_RE = /^(?:token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|key|secret|client[_-]?secret|password|passwd|credential|auth|authorization|signature|sig|signed|assertion|saml|session|jwt|bearer|code|[a-z0-9][a-z0-9\-_]*[-_](?:token|secret|signature|password|passwd|credential|key|auth))$/i
 
 /**
  * Scrub one URL: strip userinfo, redact sensitive query values. Unparsable
@@ -61,7 +61,11 @@ export function sanitizeUrl(raw) {
 
 const AUTH_HEADER_RE = /(authorization\s*:\s*)(?:bearer\s+)?[^\s"']+/gi
 const SECRET_ASSIGN_RE = /\b(token|access[_-]?token|api[_-]?key|apikey|secret|password|passwd|credential)\b(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s"']+)/gi
-const URL_IN_TEXT_RE = /(https?:\/\/[^\s'"<>]+)/g
+// ANY scheme with an authority, not just http(s): credentials travel in
+// postgres://user:pw@host, mysql://, redis://, mongodb+srv://, ftp:// and
+// ssh:// URLs just as often, and a command carrying one is persisted verbatim
+// into the journal (on disk) when the scheme is not matched here.
+const URL_IN_TEXT_RE = /([a-z][a-z0-9+.\-]*:\/\/[^\s'"<>]+)/gi
 
 /**
  * Scrub one command string before it is persisted: URLs lose credentials and

@@ -12,6 +12,16 @@
 import { mkdir, readFile, appendFile, stat, open } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
+// seq allocation used to re-read and re-parse the WHOLE journal on every single
+// append (read-modify-write over a growing file = O(n²) per session, ~2.5 s for
+// 2000 records and several times that for a full-trash of a large directory).
+// The cache is keyed by file path and shared by every instance created for that
+// path, because storesAtDirectory() builds a fresh journal per call and a
+// per-instance cache would hand out duplicate seqs. `size` is the last observed
+// file size: a smaller file means the journal was destroyed (cleanup) or
+// replaced, so the base is re-read once.
+const seqState = new Map() // filePath → { lastSeq, size }
+
 export function createChangeJournal(filePath, logger) {
   /**
    * Read every record, oldest first. Tolerates a torn trailing line (a crash
@@ -41,9 +51,19 @@ export function createChangeJournal(filePath, logger) {
   }
 
   async function nextSeq() {
-    const records = await readAll()
-    const last = records[records.length - 1]
-    return Number.isFinite(last?.seq) ? last.seq + 1 : 0
+    const info = await stat(filePath).catch(() => null)
+    const size = info?.isFile() === true ? info.size : 0
+    const cached = seqState.get(filePath)
+    if (cached === undefined || size < cached.size) {
+      const records = await readAll()
+      const last = records[records.length - 1]
+      const base = Number.isFinite(last?.seq) ? last.seq : -1
+      seqState.set(filePath, { lastSeq: base + 1, size })
+      return base + 1
+    }
+    cached.lastSeq += 1
+    cached.size = size
+    return cached.lastSeq
   }
 
   /**

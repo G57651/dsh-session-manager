@@ -875,6 +875,17 @@ function forceBoot() {
   await journal.append({ marker: 'after-torn' })
   const after = await journal.readAll()
   ok(after.some(record => record.marker === 'after-torn'), 'journal: a record appended after a torn line survives')
+  // seq 缓存必须跨实例共享：storesAtDirectory 每次调用都会新建一个 journal，
+  // 各实例若各自缓存 lastSeq，交错写入就会发出重复序号
+  {
+    const shared = join(jdir, 'shared.jsonl')
+    const a = createChangeJournal(shared, null)
+    const b = createChangeJournal(shared, null)
+    for (let i = 0; i < 40; i += 1) await (i % 2 === 0 ? a : b).append({ marker: i })
+    const seqs = (await a.readAll()).map(record => record.seq)
+    ok(seqs.length === 40 && new Set(seqs).size === 40, `journal: two instances over one file never duplicate a seq (got ${seqs.length} records / ${new Set(seqs).size} seqs)`)
+    ok(seqs.every((seq, index) => index === 0 || seq > seqs[index - 1]), 'journal: seqs stay strictly increasing across instances')
+  }
   rmSync(jdir, { recursive: true, force: true })
 }
 {
@@ -904,6 +915,18 @@ function forceBoot() {
   ok(journal.includes('sk-PLAINSECRET42') === false, 'cmdscrub: bearer token never reaches the journal')
   ok(journal.includes('user:pw@') === false, 'cmdscrub: URL credentials never reach the journal')
   removeSessionFromCorpus(id)
+}
+{
+  // 非 http(s) 方案的 URL 同样携带凭据（postgres://user:pw@host），
+  // 只匹配 https?:// 会把数据库/缓存口令原样写进日志
+  const { sanitizeCommand } = await import(new URL('../lifecycle/trackers/observe.js', import.meta.url).href)
+  const scrubbed = sanitizeCommand('nohup psql postgres://admin:pg-secret@db.internal:5432/app &')
+  ok(scrubbed.includes('pg-secret') === false, `cmdscrub: a postgres:// credential is redacted (got ${scrubbed})`)
+  ok(scrubbed.includes('admin') === false, `cmdscrub: the postgres:// username is stripped too (got ${scrubbed})`)
+  const redis = sanitizeCommand('redis-cli -u redis://default:r3dis-pw@cache.internal:6379 ping')
+  ok(redis.includes('r3dis-pw') === false, `cmdscrub: a redis:// credential is redacted (got ${redis})`)
+  const signed = sanitizeCommand('curl https://x.example.com/f?X-Amz-Signature=abc123 -o out.bin')
+  ok(signed.includes('abc123') === false, `cmdscrub: a non-listed signed query param is still scrubbed by name (got ${signed})`)
 }
 {
   // M1: journal-supplied hashes are validated (no snapshot-store path escape)
