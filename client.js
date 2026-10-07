@@ -289,7 +289,19 @@ window.__ModuleLoader__.load({
 		// ---------------------------------------------------------------------------
 
 		function createApi(ctx) {
-		  const call = (endpoint, payload) => ctx.connection.rpc.call(CHANNEL, endpoint, payload ?? {})
+		  // Every RPC is normalized to a failure ENVELOPE, never a rejection. Callers
+		  // are written as `void controller.x()` all over the view (buttons, debounced
+		  // refresh, event handlers), so a transport-level rejection — the channel is
+		  // down, or the host handler threw before building its own envelope — would be
+		  // dropped on the floor: no notice, no error state, a spinner that never stops.
+		  const call = async (endpoint, payload) => {
+		    try {
+		      return await ctx.connection.rpc.call(CHANNEL, endpoint, payload ?? {})
+		    } catch (error) {
+		      console.warn(`[dsh-session-manager] ${endpoint} transport failed:`, error?.message ?? error)
+		      return { ok: false, error: { code: 'transport', message: error?.message ?? 'rpc-transport-failed', details: {} } }
+		    }
+		  }
 		  return {
 		    list: view => call('list', { view }),
 		    archive: ids => call('archive', { ids }),

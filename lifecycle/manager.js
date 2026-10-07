@@ -1011,16 +1011,24 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
         results.push({ path: relativePath, ok: false, error: { code: 'resource-missing', message: 'the resource no longer exists on disk' } })
         continue
       }
+      let entry = null
       try {
         // 双写：先复制进插件内回收站（内容+元数据），再移入系统废纸篓。
         // 复制失败 → 不动文件，逐条报错。
-        const entry = await recycle.put({ sessionId, workspaceCwd: cwd, relativePath, trashPath: null })
+        entry = await recycle.put({ sessionId, workspaceCwd: cwd, relativePath, trashPath: null })
         const trashed = await trash.moveToTrash(absolute)
         await recycle.noteTrashPath(entry.entryId, trashed.trashPath ?? null).catch(() => {})
         if (runtime !== null) await noteUserTrash(runtime, relativePath, entry, trashed)
         results.push({ path: relativePath, ok: true, via: trashed.via, entryId: entry.entryId })
       } catch (error) {
         logger?.warn?.(`[dsh-session-manager] trash ${relativePath} failed: ${error?.message ?? error}`)
+        // The bin copy was written BEFORE the OS-trash move, so a failed move
+        // would leave a phantom entry: a payload + index row for a file this
+        // call never trashed (a concurrent delete of the same path, or a
+        // helper that refused). Restore is impossible-or-duplicating from it,
+        // and the payload leaks. noteTrashPath has not run yet, so purging here
+        // cannot touch the OS-trash copy a successful concurrent call created.
+        if (entry !== null) await recycle.purge(entry.entryId).catch(() => {})
         results.push({ path: relativePath, ok: false, error: { code: error?.code ?? 'trash-failed', message: error?.message ?? 'trash-failed' } })
       }
     }

@@ -1328,6 +1328,197 @@ function forceBoot() {
   removeSessionFromCorpus(id)
 }
 
+// --- 并发交错不变量：删除/恢复/清理/diff 同时打在同一会话上 ------------------------
+{
+  const id = 'session-stress'
+  const cwd = makeSession(id)
+  mkdirSync(join(cwd, 's'), { recursive: true })
+  await call(dispatch, 'track', { ids: [id] })
+  const names = Array.from({ length: 40 }, (_, index) => `s/f${index}.txt`)
+  for (const name of names) writeFileSync(join(cwd, name), `content-of-${name}`)
+  await call(dispatch, 'track', { ids: [id] })
+
+  const binDir = join(home, 'dsh-session-manager', 'recycle')
+  const binEntries = () => {
+    try {
+      return JSON.parse(readFileSync(join(binDir, 'index.json'), 'utf8')).entries.filter(entry => entry.sessionId === id)
+    } catch {
+      return []
+    }
+  }
+
+  const groupA = names.slice(0, 15)
+  const groupB = names.slice(15, 30)
+  await Promise.all([
+    call(dispatch, 'deleteResources', { id, paths: groupA }),
+    call(dispatch, 'deleteResources', { id, paths: groupB }),
+    call(dispatch, 'track', { ids: [id] }),
+    call(dispatch, 'cleanupStatus', { ids: [id] }),
+    call(dispatch, 'changes', { id }),
+  ])
+
+  // 第二轮：恢复前 5 个条目 + 删除剩下的 + diff + 清理同时进行
+  const toRestore = binEntries().slice(0, 5)
+  const groupC = names.slice(30)
+  const settled = await Promise.all([
+    ...toRestore.map(entry => call(dispatch, 'recycleRestore', { entryId: entry.entryId })),
+    call(dispatch, 'deleteResources', { id, paths: groupC }),
+    call(dispatch, 'track', { ids: [id] }),
+    call(dispatch, 'cleanup', { ids: [id], mode: 'rollback-only' }),
+  ])
+
+  // I1: 恢复成功的路径必须回到工作区且内容完好（并发下不得写坏）
+  toRestore.forEach((entry, index) => {
+    const result = settled[index]
+    if (result?.ok === true) {
+      const restored = join(cwd, entry.originalPath)
+      ok(existsSync(restored) === true, `stress: restored ${entry.originalPath} is back on disk`)
+      ok(readFileSync(restored, 'utf8') === `content-of-${entry.originalPath}`, `stress: restored ${entry.originalPath} content is intact`)
+    }
+  })
+
+  // I2: 索引里每条都必须有 payload（无幽灵条目：删除报成功、恢复时无处可取）
+  for (const entry of binEntries()) {
+    const payload = join(binDir, entry.entryId, 'payload', entry.name)
+    ok(existsSync(payload) === true, `stress: bin entry ${entry.entryId} has its payload (no phantom entry)`)
+  }
+
+  // I3: 日志可解析且序号唯一（并发 append 不得互相覆盖或撕裂）
+  const journalText = read(join(trackingDir(id), 'changes.jsonl')) ?? ''
+  const journalRecords = journalText.split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line))
+  const seqSet = new Set(journalRecords.map(record => record.seq))
+  ok(seqSet.size === journalRecords.length, `stress: journal seqs stay unique after interleaved writes (${journalRecords.length} records / ${seqSet.size} seqs)`)
+
+  // I4: 资源视图说 trashed 的路径必须真的不在磁盘上（视图不得谎报）
+  const rowsAfter = (await call(dispatch, 'resources', { id })).value.resources
+  for (const row of rowsAfter.filter(entry => entry.status === 'trashed')) {
+    ok(!existsSync(join(cwd, row.identifier)), `stress: view reports ${row.identifier} trashed only while it is off disk`)
+  }
+
+  // I5: 清理幂等——再来一次不得报错、不得破坏已恢复的文件
+  const cleanupAgain = await call(dispatch, 'cleanup', { ids: [id], mode: 'rollback-only' })
+  ok(cleanupAgain.value.results[0]?.ok === true, `stress: cleanup is idempotent after the storm (got ${JSON.stringify(cleanupAgain.value.results[0]?.failures ?? [])})`)
+  for (const entry of toRestore) {
+    if (existsSync(join(cwd, entry.originalPath))) {
+      ok(readFileSync(join(cwd, entry.originalPath), 'utf8') === `content-of-${entry.originalPath}`, 'stress: a second cleanup leaves restored content intact')
+    }
+  }
+
+  removeSessionFromCorpus(id)
+}
+
+// --- 更狠的交错：同一路径并发删除 / 删目录与恢复其子文件并发 ------------------------
+{
+  const id = 'session-stress2'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  mkdirSync(join(cwd, 'd'), { recursive: true })
+  writeFileSync(join(cwd, 'd', 'child.txt'), 'child-content')
+  writeFileSync(join(cwd, 'dup.txt'), 'dup-content')
+  await call(dispatch, 'track', { ids: [id] })
+
+  const binDir = join(home, 'dsh-session-manager', 'recycle')
+  const binEntries = () => {
+    try {
+      return JSON.parse(readFileSync(join(binDir, 'index.json'), 'utf8')).entries.filter(entry => entry.sessionId === id)
+    } catch {
+      return []
+    }
+  }
+
+  // (a) 同一路径并发删两次：恰好一次成功，且索引里恰好一条（失败的调用
+  //     不得把自己的回收站副本留在索引里变成幽灵条目）
+  const [first, second] = await Promise.all([
+    call(dispatch, 'deleteResources', { id, paths: ['dup.txt'] }),
+    call(dispatch, 'deleteResources', { id, paths: ['dup.txt'] }),
+  ])
+  const okCount = [first, second].filter(result => result.value.results[0]?.ok === true).length
+  ok(okCount === 1, `stress2: exactly one of two concurrent deletes of one path succeeds (got ${okCount})`)
+  const dupEntries = binEntries().filter(entry => entry.originalPath === 'dup.txt')
+  ok(dupEntries.length === 1, `stress2: a failed concurrent delete leaves no phantom bin entry (got ${dupEntries.length})`)
+  ok(!existsSync(join(cwd, 'dup.txt')), 'stress2: the file is gone from the workspace')
+
+  // 幽灵条目会让「恢复」要么重复写回、要么撞 target-exists，所以它必须能正常恢复
+  if (dupEntries.length >= 1) {
+    const restored = await call(dispatch, 'recycleRestore', { entryId: dupEntries[0].entryId })
+    ok(restored.ok === true && readFileSync(join(cwd, 'dup.txt'), 'utf8') === 'dup-content', `stress2: the surviving entry restores cleanly (got ${JSON.stringify(restored.error)})`)
+  }
+
+  // (b) 删除整个目录与恢复其子文件并发：终态必须自洽（目录不在，且子文件
+  //     要么回来、要么条目仍在回收站里可恢复，不得两边都没有）
+  const seeded = await call(dispatch, 'deleteResources', { id, paths: ['d/child.txt'] })
+  const childEntry = seeded.value.results[0]?.entryId
+  if (childEntry !== undefined) {
+    const [restoreResult, dirDelete] = await Promise.all([
+      call(dispatch, 'recycleRestore', { entryId: childEntry }),
+      call(dispatch, 'deleteResources', { id, paths: ['d'] }),
+    ])
+    ok(dirDelete.value.results[0]?.ok === true, `stress2: the directory delete succeeds (got ${JSON.stringify(dirDelete.value.results[0]?.error)})`)
+    ok(!existsSync(join(cwd, 'd')), 'stress2: the directory is gone')
+    const childOnDisk = existsSync(join(cwd, 'd', 'child.txt'))
+    const childInBin = binEntries().some(entry => entry.originalPath === 'd/child.txt')
+    const childInTreeEntry = binEntries().some(entry => entry.originalPath === 'd')
+    ok(childOnDisk === true || childInBin === true || childInTreeEntry === true, `stress2: the child is neither on disk nor recoverable from the bin (restore=${JSON.stringify(restoreResult.error ?? 'ok')})`)
+  }
+
+  removeSessionFromCorpus(id)
+}
+
+// --- 崩溃/重启后的持久性：回收站树 + 删除后销毁日志前被 kill ----------------------
+{
+  // A: 回收站里的目录树必须在重启后仍然「不被重新记账、不被复活」——
+  // tracker 状态只能从日志重建，forgetTree 的效果必须靠日志记录本身持久化
+  const id = 'session-trashrestart'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  mkdirSync(join(cwd, 't', 'sub'), { recursive: true })
+  writeFileSync(join(cwd, 't', 'a.txt'), 'a')
+  writeFileSync(join(cwd, 't', 'sub', 'b.txt'), 'b')
+  await call(dispatch, 'track', { ids: [id] })
+  const del = await call(dispatch, 'deleteResources', { id, paths: ['t'] })
+  ok(del.value.results[0]?.ok === true, 'trashrestart: tree trashed')
+  const totalBefore = (await call(dispatch, 'changes', { id })).value.total
+
+  const restarted = bootWith({})
+  await call(restarted.dispatch, 'track', { ids: [id] })
+  const totalAfter = (await call(restarted.dispatch, 'changes', { id })).value.total
+  ok(totalAfter === totalBefore, `trashrestart: a restart does not re-journal the trashed tree (${totalBefore} → ${totalAfter})`)
+  const rows = (await call(restarted.dispatch, 'resources', { id })).value.resources
+  for (const path of ['t/a.txt', 't/sub', 't/sub/b.txt']) {
+    const row = rows.find(candidate => candidate.identifier === path)
+    ok(row?.status === 'trashed', `trashrestart: ${path} still reads as trashed after a restart (got ${row?.status})`)
+  }
+  const cleanup = await call(restarted.dispatch, 'cleanup', { ids: [id], mode: 'rollback-only' })
+  ok(cleanup.value.results[0]?.ok === true, 'trashrestart: cleanup ok after restart')
+  ok(!existsSync(join(cwd, 't')), 'trashrestart: cleanup after a restart does not resurrect the tree')
+  removeSessionFromCorpus(id)
+}
+{
+  // B: 进程在「会话目录已删除、日志尚未销毁」之间被 kill：
+  // 重启的 resume 必须补完收尾（销毁日志），且不得重建任何目录
+  const id = 'session-killfinish'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'x.txt'), 'x')
+  await call(dispatch, 'track', { ids: [id] })
+
+  writeFileSync(join(home, 'dsh-session-manager-deleted.json'), `${JSON.stringify({
+    version: 1,
+    items: [{ id, title: null, deletedAt: NOW, wasArchived: false, purged: false }],
+  })}\n`)
+  writeFileSync(join(trackingDir(id), 'cleanup.json'), `${JSON.stringify({
+    version: 1, sessionId: id, state: 'session_deleted', mode: 'full', requestedAt: NOW, attempts: 1,
+    results: [], conflicts: [], failures: [],
+  })}\n`)
+  rmSync(sessionDir(id), { recursive: true, force: true }) // 目录已删，日志还在
+
+  const restarted = bootWith({ autoResume: true })
+  ok(await waitFor(() => !existsSync(trackingDir(id))), 'killfinish: the resume pass destroys the leftover journal')
+  ok(!existsSync(sessionDir(id)), 'killfinish: the resume pass does not recreate the session directory')
+  ok(!existsSync(join(home, 'dsh-session-manager', 'tracking', id, 'baseline.json')), 'killfinish: no baseline is re-captured for a deleted session')
+  removeSessionFromCorpus(id)
+}
+
 // --- OS 废纸篓 helper：成败以结果判定（helper 退出码不可信） -----------------------
 {
   const { createTrash } = await import(new URL('../lifecycle/trash.js', import.meta.url).href)
