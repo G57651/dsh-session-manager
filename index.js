@@ -528,8 +528,17 @@ export function apply(ctx, config) {
       handle: async (payload) => {
         const id = typeof payload?.id === 'string' ? payload.id : ''
         if (id === '') return fail('no-ids', 'a single session id is required')
-        const paths = Array.isArray(payload?.paths) ? payload.paths.filter(path => typeof path === 'string' && path !== '') : []
+        const paths = Array.isArray(payload?.paths)
+          ? [...new Set(payload.paths.filter(path => typeof path === 'string' && path !== ''))]
+          : []
         if (paths.length === 0) return fail('no-paths', 'at least one resource path is required')
+        // Each path is stat'd, copied into the bin and moved to the OS
+        // wastebasket — an uncapped list is an unbounded operation, so it gets
+        // the same budget as a session batch.
+        const { maxBatchSize } = readConfig(config)
+        if (paths.length > maxBatchSize) {
+          return fail('too-many-paths', `at most ${maxBatchSize} paths are accepted per request`, { count: paths.length, maxBatchSize })
+        }
         try {
           const value = await resourceManager.deleteResources(id, paths)
           const failed = value.results.filter(result => result.ok !== true)

@@ -984,14 +984,20 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
       return { results: [] }
     }
     if (trash === undefined) {
-      return list.map(path => ({ path, ok: false, error: { code: 'trash-unavailable', message: 'the OS wastebasket integration is not available' } }))
+      return { results: list.map(path => ({ path, ok: false, error: { code: 'trash-unavailable', message: 'the OS wastebasket integration is not available' } })) }
     }
     const baseline = await storesFor(sessionId).baselineStore.load()
     if (baseline === null || typeof baseline.cwd !== 'string') {
-      return list.map(path => ({ path, ok: false, error: { code: 'untracked', message: 'this session has no resource baseline (legacy or already cleaned)' } }))
+      return { results: list.map(path => ({ path, ok: false, error: { code: 'untracked', message: 'this session has no resource baseline (legacy or already cleaned)' } })) }
     }
     const cwd = resolve(baseline.cwd)
-    const runtime = await runtimeFor(sessionId)
+    // Tracking is best-effort by design: the user's trash move is the
+    // operation, the journal record is a bonus. A journal read/parse failure
+    // must leave the delete working, not fail every path with 'internal'.
+    const runtime = await runtimeFor(sessionId).catch(error => {
+      logger?.warn?.(`[dsh-session-manager] deleteResources: runtime unavailable for ${sessionId}: ${error?.message ?? error}`)
+      return null
+    })
     const results = []
     for (const relativePath of list) {
       const absolute = resolve(cwd, relativePath)
@@ -1022,23 +1028,36 @@ export function createSessionResourceManager({ dshHome, ctx, manifest, opener, t
   }
 
   /**
-   * Record a user-initiated trash in the journal and drop the path from the
-   * live tracker. Both halves matter: the record is what makes the resource
-   * view stop presenting the path as an ordinary resource (and what keeps
-   * session cleanup from resurrecting something the user deliberately
-   * removed), while forgetting it in the tracker stops the next diff from
-   * journaling the same removal a second time as an agent deletion.
+   * Record a user-initiated trash in the journal and drop the affected paths
+   * from the live tracker. Both halves matter: the records are what make the
+   * resource view stop presenting these paths as ordinary resources (and what
+   * keeps session cleanup from resurrecting something the user deliberately
+   * removed), while forgetting them in the tracker stops the next diff from
+   * journaling the same removal again as an agent deletion.
+   *
+   * A directory is trashed with its whole tree, so every known descendant is
+   * recorded too: leaving them unmarked would show them as ordinary 'missing'
+   * rows, and cleanup would then restore the baseline files that went to the bin.
    */
   async function noteUserTrash(runtime, relativePath, entry, trashed) {
-    runtime.trackers.file.forget?.(relativePath)
-    await record(runtime, {
-      resourceType: isConfigurationName(basenameOf(relativePath)) ? RESOURCE_TYPES.CONFIGURATION : RESOURCE_TYPES.FILE,
-      action: ACTIONS.DELETED,
-      resource: { path: relativePath },
-      before: null,
-      after: null,
-      metadata: { trashed: true, entryId: entry.entryId, via: trashed?.via ?? null },
-    }).catch(() => {})
+    const typeForPath = path => isConfigurationName(basenameOf(path)) ? RESOURCE_TYPES.CONFIGURATION : RESOURCE_TYPES.FILE
+    const affected = new Map() // path → resourceType (deduped by path)
+    for (const item of runtime.trackers.file.forgetTree?.(relativePath) ?? []) {
+      affected.set(item.path, item.isDirectory === true ? RESOURCE_TYPES.DIRECTORY : typeForPath(item.path))
+    }
+    // the trashed path itself may not be in the tracker state (never diffed
+    // yet, or a directory — the state map holds file entries only)
+    affected.set(relativePath, entry?.type === 'directory' ? RESOURCE_TYPES.DIRECTORY : typeForPath(relativePath))
+    for (const [path, resourceType] of affected) {
+      await record(runtime, {
+        resourceType,
+        action: ACTIONS.DELETED,
+        resource: { path },
+        before: null,
+        after: null,
+        metadata: { trashed: true, entryId: entry.entryId, via: trashed?.via ?? null },
+      }).catch(() => {})
+    }
   }
 
   /** 插件内回收站条目（可选按会话过滤）。 */

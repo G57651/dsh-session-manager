@@ -12,9 +12,9 @@
 // 恢复后校验 SHA-256；系统废纸篓中已知路径的副本一并移除。
 
 import { cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { sha256Hex } from './types.js'
+import { sha256Hex, isInsideRoot } from './types.js'
 
 const ENTRY_ID_RE = /^bin_[a-z0-9]+_[a-z0-9]+$/
 
@@ -50,6 +50,19 @@ export function createRecycleBin({ rootDir, logger } = {}) {
       throw Object.assign(new Error('invalid-entry-id'), { code: 'invalid-entry-id' })
     }
     return join(rootDir, String(entryId))
+  }
+
+  // Every mutation is load-index → modify → save-index. Two of them interleaved
+  // (a restore landing while a delete batch is still writing) would lose the
+  // other's entry: one save overwrites the other, leaving an orphaned payload
+  // dir whose file is already gone from the workspace. Serialize the whole
+  // read-modify-write, the same way the journal serializes its appends.
+  let indexQueue = Promise.resolve()
+  function withIndexLock(job) {
+    const run = indexQueue.then(job)
+    // a failed job must not poison the queue for every later caller
+    indexQueue = run.then(() => {}, () => {})
+    return run
   }
 
   return {
@@ -97,9 +110,11 @@ export function createRecycleBin({ rootDir, logger } = {}) {
       }
       await mkdir(entryDir, { recursive: true, mode: 0o700 })
       await writeFile(join(entryDir, 'meta.json'), `${JSON.stringify(entry, null, 1)}\n`, 'utf8')
-      const entries = await loadIndex()
-      entries.unshift(entry)
-      await saveIndex(entries)
+      await withIndexLock(async () => {
+        const entries = await loadIndex()
+        entries.unshift(entry)
+        await saveIndex(entries)
+      })
       return entry
     },
 
@@ -108,12 +123,14 @@ export function createRecycleBin({ rootDir, logger } = {}) {
       if (ENTRY_ID_RE.test(String(entryId)) === false) {
         throw Object.assign(new Error('invalid-entry-id'), { code: 'invalid-entry-id' })
       }
-      const entries = await loadIndex()
-      const entry = entries.find(candidate => candidate.entryId === entryId)
-      if (entry === undefined) return null
-      entry.trashPath = typeof trashPath === 'string' && trashPath !== '' ? trashPath : null
-      await saveIndex(entries)
-      return entry
+      return withIndexLock(async () => {
+        const entries = await loadIndex()
+        const entry = entries.find(candidate => candidate.entryId === entryId)
+        if (entry === undefined) return null
+        entry.trashPath = typeof trashPath === 'string' && trashPath !== '' ? trashPath : null
+        await saveIndex(entries)
+        return entry
+      })
     },
 
     /** Entries of the bin, optionally filtered to one session. */
@@ -136,25 +153,48 @@ export function createRecycleBin({ rootDir, logger } = {}) {
       const entryDir = entryDirOf(entryId)
       const payloadDir = join(entryDir, 'payload')
       const target = join(entry.workspaceCwd, entry.originalPath)
-      if ((await pathExists(target)) === true && overwrite === false) {
+      // The index is a file on disk, so the recorded pair is untrusted input at
+      // restore time: a tampered (or legacy) entry must never write outside the
+      // workspace it was recorded for.
+      if (isInsideRoot(target, entry.workspaceCwd) === false) {
+        throw Object.assign(new Error('entry path escapes its workspace'), { code: 'unsafe-path' })
+      }
+      if (overwrite === false && (await pathExists(target)) === true) {
         throw Object.assign(new Error('target already exists'), { code: 'target-exists' })
       }
-      await mkdir(join(target, '..'), { recursive: true, mode: 0o700 })
+      await mkdir(dirname(target), { recursive: true, mode: 0o700 })
       if (entry.type === 'directory') {
-        await cp(join(payloadDir, entry.name), target, { recursive: true })
+        // force:false + errorOnExist keeps the no-overwrite guarantee atomic
+        // (the earlier pathExists probe alone is a TOCTOU window)
+        await cp(join(payloadDir, entry.name), target, { recursive: true, force: false, errorOnExist: true }).catch(error => {
+          if (error?.code === 'ERR_FS_CP_EEXIST' || error?.code === 'EEXIST') {
+            throw Object.assign(new Error('target already exists'), { code: 'target-exists' })
+          }
+          throw error
+        })
       } else {
         const content = await readFile(join(payloadDir, entry.name))
-        await writeFile(target, content)
+        // verify BEFORE writing: a corrupted payload must never reach the
+        // workspace, and doing it after leaves a corrupt file behind that makes
+        // every retry fail with target-exists
         if (sha256Hex(content) !== entry.sha256) {
           throw Object.assign(new Error('bin content corrupted'), { code: 'bin-corrupted' })
         }
+        await writeFile(target, content, overwrite === true ? undefined : { flag: 'wx' }).catch(error => {
+          if (error?.code === 'EEXIST') {
+            throw Object.assign(new Error('target already exists'), { code: 'target-exists' })
+          }
+          throw error
+        })
       }
       // 恢复完成：系统废纸篓中已知路径的副本一并移除（未知平台的副本留给用户）
       if (typeof entry.trashPath === 'string' && entry.trashPath !== '') {
         await rm(entry.trashPath, { recursive: true, force: true }).catch(() => {})
       }
       await rm(entryDir, { recursive: true, force: true })
-      await saveIndex((await loadIndex()).filter(candidate => candidate.entryId !== entryId))
+      await withIndexLock(async () => {
+        await saveIndex((await loadIndex()).filter(candidate => candidate.entryId !== entryId))
+      })
       return entry
     },
 
@@ -170,7 +210,9 @@ export function createRecycleBin({ rootDir, logger } = {}) {
         await rm(entry.trashPath, { recursive: true, force: true }).catch(() => {})
       }
       await rm(entryDirOf(entryId), { recursive: true, force: true })
-      await saveIndex((await loadIndex()).filter(candidate => candidate.entryId !== entryId))
+      await withIndexLock(async () => {
+        await saveIndex((await loadIndex()).filter(candidate => candidate.entryId !== entryId))
+      })
       return true
     },
   }

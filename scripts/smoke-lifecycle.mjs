@@ -22,9 +22,10 @@
 // Run: node scripts/smoke-lifecycle.mjs
 
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, statSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { sha256Hex } from '../lifecycle/types.js'
 
 // never pop real Finder/Explorer windows during the smoke run
 process.env.DSH_SM_OPEN_MODE = 'log'
@@ -1161,6 +1162,53 @@ function forceBoot() {
   // entryId 穿越
   const evil = await call(dispatch, 'recycleRestore', { entryId: '../evil' })
   ok(evil.ok === false, 'bin: entryId traversal rejected')
+
+  // 索引里的 originalPath 是磁盘上的不可信输入：恢复时不得写出工作区之外
+  {
+    const outside = JSON.parse(JSON.stringify(fileEntry))
+    outside.originalPath = '../escaped.txt'
+    mkdirSync(join(binDir, outside.entryId), { recursive: true })
+    writeFileSync(join(binDir, outside.entryId, 'meta.json'), JSON.stringify(outside))
+    writeFileSync(join(binDir, 'index.json'), JSON.stringify({ entries: [outside] }))
+    const escaped = await call(dispatch, 'recycleRestore', { entryId: outside.entryId })
+    ok(escaped.ok === false && escaped.error?.code === 'unsafe-path', `bin: index path escaping the workspace is rejected (got ${JSON.stringify(escaped.error)})`)
+    ok(!existsSync(join(homedir(), 'escaped.txt')) && !existsSync(join(home, 'escaped.txt')), 'bin: nothing written outside the workspace')
+  }
+
+  // 内容损坏：必须在写盘之前校验，否则工作区会留下损坏文件且重试被 target-exists 卡死
+  {
+    const corrupted = JSON.parse(JSON.stringify(fileEntry))
+    corrupted.originalPath = 'corrupt-target.txt'
+    corrupted.name = 'corrupt-target.txt'
+    corrupted.sha256 = sha256Hex('the original bytes')
+    mkdirSync(join(binDir, corrupted.entryId, 'payload'), { recursive: true })
+    writeFileSync(join(binDir, corrupted.entryId, 'payload', corrupted.name), 'TAMPERED BYTES')
+    writeFileSync(join(binDir, 'index.json'), JSON.stringify({ entries: [corrupted] }))
+    const bad = await call(dispatch, 'recycleRestore', { entryId: corrupted.entryId })
+    ok(bad.ok === false && bad.error?.code === 'bin-corrupted', `bin: corrupted payload refused (got ${JSON.stringify(bad.error)})`)
+    ok(!existsSync(join(cwd, 'corrupt-target.txt')), 'bin: corrupted payload never reaches the workspace')
+    // 条目保留，修好内容后仍可恢复（不会被 target-exists 卡死）
+    writeFileSync(join(binDir, corrupted.entryId, 'payload', corrupted.name), 'the original bytes')
+    const retry = await call(dispatch, 'recycleRestore', { entryId: corrupted.entryId })
+    ok(retry.ok === true && readFileSync(join(cwd, 'corrupt-target.txt'), 'utf8') === 'the original bytes', `bin: retry after repair succeeds (got ${JSON.stringify(retry.error ?? retry.value?.entryId)})`)
+  }
+
+  // 并发索引写入不得丢条目（读-改-写必须串行）
+  {
+    writeFileSync(join(cwd, 'c1.txt'), 'c1')
+    writeFileSync(join(cwd, 'c2.txt'), 'c2')
+    writeFileSync(join(cwd, 'c3.txt'), 'c3')
+    const [r1, r2, r3] = await Promise.all([
+      call(dispatch, 'deleteResources', { id, paths: ['c1.txt'] }),
+      call(dispatch, 'deleteResources', { id, paths: ['c2.txt'] }),
+      call(dispatch, 'deleteResources', { id, paths: ['c3.txt'] }),
+    ])
+    ok([r1, r2, r3].every(result => result.value.results[0]?.ok === true), 'bin: concurrent deletes all succeed')
+    const ids = [r1, r2, r3].map(result => result.value.results[0].entryId)
+    const index = JSON.parse(readFileSync(join(binDir, 'index.json'), 'utf8')).entries
+    ok(ids.every(entryId => index.some(entry => entry.entryId === entryId)), `bin: no concurrent index update is lost (index has ${index.length}, need 3)`)
+  }
+
   removeSessionFromCorpus(id)
 }
 
@@ -1210,6 +1258,94 @@ function forceBoot() {
   ok(trashed !== undefined && trashed.outcome === 'skipped', 'usertrash: cleanup reports the path as a preserved user-trashed skip')
 
   removeSessionFromCorpus(id)
+}
+
+{
+  // 删除整个目录树：子路径也必须标记为 trashed，否则它们会当成普通资源
+  // 继续显示，且下一次 diff 会把它们重新记成普通删除
+  const id = 'session-treetrash'
+  const cwd = makeSession(id)
+  // baseline first: tree/base.txt is a pre-existing file, everything created
+  // afterwards belongs to the session
+  mkdirSync(join(cwd, 'tree'), { recursive: true })
+  writeFileSync(join(cwd, 'tree', 'base.txt'), 'baseline content')
+  await call(dispatch, 'track', { ids: [id] })
+  mkdirSync(join(cwd, 'tree', 'sub'), { recursive: true })
+  writeFileSync(join(cwd, 'tree', 'new.txt'), 'session created')
+  writeFileSync(join(cwd, 'tree', 'sub', 'deep.txt'), 'nested created')
+  await call(dispatch, 'track', { ids: [id] })
+
+  let rows = (await call(dispatch, 'resources', { id })).value.resources
+  ok(['tree/new.txt', 'tree/sub', 'tree/sub/deep.txt'].every(path => rows.some(entry => entry.identifier === path)), `treetrash: the session-created tree is tracked as resources (got ${rows.map(entry => entry.identifier).join(', ')})`)
+  ok(rows.find(entry => entry.identifier === 'tree/sub/deep.txt')?.status !== 'trashed', 'treetrash: nested file starts as an ordinary resource')
+
+  const del = await call(dispatch, 'deleteResources', { id, paths: ['tree'] })
+  ok(del.value.results[0]?.ok === true, `treetrash: directory trashed (got ${JSON.stringify(del.value.results[0]?.error)})`)
+  ok(!existsSync(join(cwd, 'tree')), 'treetrash: the whole directory is gone from the workspace')
+
+  rows = (await call(dispatch, 'resources', { id })).value.resources
+  for (const path of ['tree/new.txt', 'tree/sub', 'tree/sub/deep.txt']) {
+    const entry = rows.find(candidate => candidate.identifier === path)
+    ok(entry !== undefined && entry.status === 'trashed', `treetrash: ${path} reads as trashed (got ${entry?.status})`)
+    ok(entry.trashed === true, `treetrash: ${path} carries the trashed flag so the view hides it`)
+  }
+
+  // 下次 diff 不得把树里的路径重新记成普通删除
+  const before = (await call(dispatch, 'changes', { id })).value.total
+  await call(dispatch, 'track', { ids: [id] })
+  const after = (await call(dispatch, 'changes', { id })).value.total
+  ok(after === before, `treetrash: the next diff does not re-journal the tree (${before} → ${after})`)
+
+  // 清理同样不得复活这棵树
+  const cleanup = await call(dispatch, 'cleanup', { ids: [id], mode: 'rollback-only' })
+  ok(cleanup.value.results[0]?.ok === true, 'treetrash: cleanup ok')
+  ok(!existsSync(join(cwd, 'tree')), 'treetrash: cleanup did NOT resurrect the trashed tree')
+  ok(!existsSync(join(cwd, 'tree', 'base.txt')), 'treetrash: the baseline file inside the tree stays in the bin (not restored)')
+
+  removeSessionFromCorpus(id)
+}
+
+// --- OS 废纸篓 helper：成败以结果判定（helper 退出码不可信） -----------------------
+{
+  const { createTrash } = await import(new URL('../lifecycle/trash.js', import.meta.url).href)
+  const helperDir = join(home, 'fake-helpers')
+  mkdirSync(helperDir, { recursive: true })
+  const fakePowerShell = join(helperDir, 'powershell.exe')
+  const savedMode = process.env.DSH_SM_OPEN_MODE
+  const savedPath = process.env.PATH
+  const savedPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+  try {
+    delete process.env.DSH_SM_OPEN_MODE // 要真的 spawn，而不是记录模式
+    process.env.PATH = `${helperDir}:${savedPath}`
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+
+    const victim = join(home, 'helper-victim.txt')
+
+    // 1) helper 静默失败（退出码 0，但文件没动）→ 必须报错，不能谎报成功
+    writeFileSync(fakePowerShell, '#!/bin/sh\nexit 0\n')
+    chmodSync(fakePowerShell, 0o755)
+    writeFileSync(victim, 'still here')
+    let failure = null
+    try {
+      await createTrash().moveToTrash(victim)
+    } catch (error) {
+      failure = error
+    }
+    ok(failure?.code === 'trash-failed', `os trash: a helper that leaves the file in place reports failure, not success (got ${failure?.code ?? 'success'})`)
+    ok(existsSync(victim), 'os trash: the untouched file is still on disk')
+
+    // 2) helper 真的移走文件 → 必须判成功（结果校验不能误杀正常路径）
+    writeFileSync(fakePowerShell, `#!/bin/sh\nrm -f ${JSON.stringify(victim)}\n`)
+    chmodSync(fakePowerShell, 0o755)
+    const moved = await createTrash().moveToTrash(victim)
+    ok(moved?.via === 'recycle-bin', `os trash: a helper that really moves the file still reports success (got ${moved?.via ?? 'n/a'})`)
+    ok(!existsSync(victim), 'os trash: the moved file is gone from the workspace')
+  } finally {
+    if (savedPlatform !== undefined) Object.defineProperty(process, 'platform', savedPlatform)
+    process.env.PATH = savedPath
+    if (savedMode === undefined) delete process.env.DSH_SM_OPEN_MODE
+    else process.env.DSH_SM_OPEN_MODE = savedMode
+  }
 }
 
 // --- dispose -----------------------------------------------------------------------

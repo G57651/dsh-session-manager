@@ -533,7 +533,14 @@ window.__ModuleLoader__.load({
 		  }
 
 		  /** Load one session's resource view + cleanup status into the detail modal. */
-		  async function openResources(id) {
+		  async function openResources(id, { refresh = false } = {}) {
+		    // An op-driven refresh must not resurrect a modal the user just closed, nor
+		    // retarget one they switched to another session: opening is the user's
+		    // call, re-reading is not.
+		    if (refresh === true) {
+		      const current = instance.getSnapshot().detail
+		      if (current === null || current.id !== id) return
+		    }
 		    const seq = ++detailSeq
 		    instance.actions.openDetail(id)
 		    const [resources, status, bin] = await Promise.all([
@@ -625,7 +632,7 @@ window.__ModuleLoader__.load({
 		      // the paths are already off disk, so the list must re-read no matter how
 		      // the loop ended — skipping this leaves deleted rows on screen
 		      instance.actions.setDetailBusy(false)
-		      await openResources(detail.id).catch(() => {})
+		      await openResources(detail.id, { refresh: true }).catch(() => {})
 		    }
 		    if (failedKeys.length > 0) {
 		      // keep the failures selected so a second click retries exactly them
@@ -648,7 +655,7 @@ window.__ModuleLoader__.load({
 		      return false
 		    }
 		    instance.actions.setNotice({ tone: 'info', text: t('res.restored', { name: result.value?.originalPath ?? '' }) })
-		    await openResources(detail.id).catch(() => {})
+		    await openResources(detail.id, { refresh: true }).catch(() => {})
 		    return true
 		  }
 
@@ -1070,7 +1077,7 @@ window.__ModuleLoader__.load({
 		                      className: 'dsm-dangerButton',
 		                      'aria-label': t('res.deleteRow'),
 		                      disabled: detail.busy === true,
-		                      onClick: () => void controller.deleteOne(detail.id, row.identifier).then(() => controller.openResources(detail.id)),
+		                      onClick: () => void controller.deleteOne(detail.id, row.identifier).then(() => controller.openResources(detail.id, { refresh: true })),
 		                    }, t('res.deleteRow')),
 		                  ),
 		                )

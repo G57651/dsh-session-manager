@@ -163,13 +163,32 @@ export function createFileTracker({ cwd, state, baselineDirs = [], sessionStarte
     },
 
     /**
-     * Drop a path from the last-known state. Used when something other than
-     * this tracker has already recorded the removal (a user-initiated trash
+     * Drop a path and everything under it from the last-known state, returning
+     * what was dropped (`[{ path, isDirectory }]`). Used when something other
+     * than this tracker already recorded the removal (a user-initiated trash
      * writes its own journal record), so the next diff does not journal the
-     * same removal a second time.
+     * same removal a second time. The whole tree is dropped because trashing a
+     * directory removes its descendants from the workspace at once — leaving
+     * them in the state would make the next diff re-journal each one as an
+     * ordinary deletion (and session cleanup would then restore them).
      */
-    forget(relativePath) {
-      state.delete(String(relativePath))
+    forgetTree(relativePath) {
+      const root = String(relativePath)
+      const prefix = `${root}/`
+      const dropped = []
+      for (const candidate of [...state.keys()]) {
+        if (candidate === root || candidate.startsWith(prefix)) {
+          state.delete(candidate)
+          dropped.push({ path: candidate, isDirectory: false })
+        }
+      }
+      for (const candidate of [...knownDirs]) {
+        if (candidate.startsWith(prefix)) {
+          knownDirs.delete(candidate)
+          dropped.push({ path: candidate, isDirectory: true })
+        }
+      }
+      return dropped
     },
   }
 

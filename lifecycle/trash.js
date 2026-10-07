@@ -56,6 +56,22 @@ async function run(argv) {
   await spawn(argv)
 }
 
+/**
+ * A helper's exit code is not evidence of anything (explorer.exe reports odd
+ * codes on success), so a helper-driven move is judged by its OUTCOME: the
+ * source must be gone. Without this, a silently failed PowerShell/osascript/
+ * gio call reads as success — the caller then records a phantom recycle-bin
+ * entry and a journaled trash for a file that is still on disk, and the user
+ * sees "I clicked delete and nothing happened".
+ */
+async function assertMoved(source) {
+  if (logMode() === true) return // the command was only recorded; nothing moved
+  const exists = await stat(source).then(() => true).catch(() => false)
+  if (exists === true) {
+    throw Object.assign(new Error('the wastebasket helper left the path in place'), { code: 'trash-failed' })
+  }
+}
+
 /** First free `base`, `base 2`, `base 3`… inside `dir`. */
 async function dedupName(dir, base) {
   const exists = async path => stat(path).then(() => true).catch(() => false)
@@ -116,6 +132,7 @@ export function createTrash({ logger } = {}) {
       }
       const script = `tell application "Finder" to delete POSIX file ${appleScriptString(source)}`
       await run(['osascript', '-e', script])
+      await assertMoved(source)
       if (logMode() === true) openLog.push(['osascript-finder-delete', source])
       return { via: 'finder' }
     },
@@ -128,6 +145,7 @@ export function createTrash({ logger } = {}) {
         `$bin.MoveHere('${source.replace(/'/g, "''")}')`,
       ].join(' ')
       await run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script])
+      await assertMoved(source)
       if (logMode() === true) openLog.push(['recycle-bin', source])
       return { via: 'recycle-bin' }
     },
@@ -135,10 +153,13 @@ export function createTrash({ logger } = {}) {
     async moveToTrashLinux(source) {
       try {
         await run(['gio', 'trash', source])
+        await assertMoved(source)
         if (logMode() === true) openLog.push(['gio-trash', source])
         return { via: 'gio' }
       } catch (error) {
-        if (error?.code !== 'helper-not-found') throw error
+        // gio missing, or present and ineffective: the XDG implementation below
+        // is authoritative (its rename throws on a real failure)
+        if (error?.code !== 'helper-not-found' && error?.code !== 'trash-failed') throw error
       }
       // XDG trash spec implemented directly: Trash/files + Trash/info
       const dataHome = process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share')

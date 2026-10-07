@@ -218,6 +218,14 @@ ok((await dispatch('archive', {})).error.code === 'no-ids', 'empty batch -> no-i
   host.apply(ctx2, strictConfig)
   const second = captured.second
   ok((await second('archive', { ids: ['session-aaa', 'session-bbb'] })).error.code === 'too-many-ids', 'batch above maxBatchSize rejected')
+  ok((await second('deleteResources', { id: 'session-aaa', paths: ['a', 'b'] })).error.code === 'too-many-paths', 'resource paths above maxBatchSize rejected (unbounded operation guard)')
+}
+
+// deleteResources dedupes paths: a repeated path must not be trashed twice
+{
+  const deduped = await dispatch('deleteResources', { id: 'session-aaa', paths: ['same.txt', 'same.txt', ''] })
+  ok(deduped.ok === true || deduped.error?.code === 'untracked', `deleteResources accepts a deduped path list (got ${JSON.stringify(deduped.error ?? deduped.value?.results?.length)})`)
+  if (deduped.ok === true) ok(deduped.value.results.length === 1, `a repeated path is deduped to one entry (got ${deduped.value.results.length})`)
 }
 
 // direct webServer fallback registers a route when the connection seam refuses
