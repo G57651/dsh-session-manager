@@ -238,6 +238,37 @@ ok((await dispatch('archive', {})).error.code === 'no-ids', 'empty batch -> no-i
   }
   host.apply(ctx3, config)
   ok(routes.length === 1 && routes[0].path === '/dsh-session-manager', 'fallback webServer route registered')
+
+  // 路由的 Host 判定：IPv6 回环字面量是带方括号的（"[::1]:8080"），
+  // 用 split(':')[0] 会得到 "["，在 localhost 优先解析为 ::1 的机器上
+  // 直连路由会全量 403
+  const probe = async (hostHeader) => {
+    const calls = []
+    const res = {
+      writableEnded: false,
+      destroyed: false,
+      statusCode: null,
+      writeHead(code) { this.statusCode = code },
+      end(body) { this.writableEnded = true; calls.push({ status: this.statusCode, body: body ?? '' }) },
+    }
+    const req = {
+      method: 'POST',
+      url: '/dsh-session-manager/config',
+      headers: { host: hostHeader, 'content-type': 'application/json' },
+      on(event, listener) { if (event === 'end') queueMicrotask(() => listener()); return this },
+      removeListener() { return this },
+    }
+    await routes[0].handler(req, res)
+    return calls[0] ?? { status: null, body: '' }
+  }
+  const ipv6 = await probe('[::1]:5173')
+  ok(ipv6.status !== 403, `direct route accepts an IPv6 loopback Host (got ${ipv6.status})`)
+  const expanded = await probe('[0:0:0:0:0:0:0:1]:5173')
+  ok(expanded.status !== 403, `direct route accepts the expanded IPv6 loopback spelling (got ${expanded.status})`)
+  const ipv4 = await probe('127.0.0.1:5173')
+  ok(ipv4.status !== 403, `direct route accepts an IPv4 loopback Host (got ${ipv4.status})`)
+  const foreign = await probe('evil.example.com')
+  ok(foreign.status === 403, `direct route still refuses a non-loopback Host (got ${foreign.status})`)
 }
 
 // dispose flushes stores without error

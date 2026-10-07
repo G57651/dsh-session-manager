@@ -224,8 +224,13 @@ function registerDirectRpcWebRoute(ctx, webServer, channel, dispatch, logger) {
     kind: 'prefix',
     path: channel,
     handler: async (req, res) => {
-      const host = String(req.headers.host ?? '').split(':')[0]
-      if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+      // IPv6 literals arrive bracketed ("[::1]:8080"), so a naive split(':')
+      // yields '[' and rejects EVERY IPv6 loopback request — on a host that
+      // resolves localhost to ::1 first, the direct route looks dead.
+      const hostHeader = String(req.headers.host ?? '')
+      const bracketed = /^\[([^\]]+)\]/.exec(hostHeader)
+      const host = (bracketed !== null ? bracketed[1] : hostHeader.split(':')[0]).toLowerCase()
+      if (LOOPBACK_HOSTS.has(host) === false) {
         res.writeHead(403)
         res.end('forbidden')
         return
@@ -267,6 +272,9 @@ function registerDirectRpcWebRoute(ctx, webServer, channel, dispatch, logger) {
 }
 
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024
+
+/** Hostnames allowed to reach the direct route (loopback only, any spelling). */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0:0:0:0:0:0:0:1'])
 
 /**
  * Collect the request body, capped at MAX_REQUEST_BYTES.

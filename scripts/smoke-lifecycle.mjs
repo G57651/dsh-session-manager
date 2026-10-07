@@ -1519,6 +1519,55 @@ function forceBoot() {
   removeSessionFromCorpus(id)
 }
 
+// --- 对抗性输入：每个端点灌恶意载荷，必须回信封而不是抛异常 ----------------------
+{
+  const id = 'session-adversarial'
+  const cwd = makeSession(id)
+  await call(dispatch, 'track', { ids: [id] })
+  writeFileSync(join(cwd, 'ok.txt'), 'ok')
+  await call(dispatch, 'track', { ids: [id] })
+
+  const hostile = ['', '../escape', '../../etc/passwd', '/etc/passwd', 'a\u0000b', '.', '..', '/', 'C:\\Windows', 'x'.repeat(5000), '\u202e reversed', 'nested/../../out']
+  const envelopes = []
+  const raw = async (endpoint, payload) => {
+    const result = await dispatch(endpoint, payload) // must never throw
+    ok(result !== null && typeof result === 'object' && typeof result.ok === 'boolean', `adversarial: ${endpoint} always answers with an envelope`)
+    envelopes.push({ endpoint, result })
+    return result
+  }
+
+  for (const path of hostile) await raw('deleteResources', { id, paths: [path] })
+  for (const entryId of hostile) await raw('recycleRestore', { entryId })
+  for (const otherId of hostile) {
+    await raw('resources', { id: otherId })
+    await raw('cleanupStatus', { ids: [otherId] })
+    await raw('changes', { id: otherId })
+    await raw('cleanup', { ids: [otherId], mode: 'nuke' })
+  }
+  for (const path of hostile) await raw('openResource', { id, path })
+  await raw('list', { view: 'nonsense' })
+  await raw('list', { view: null })
+  await raw('track', { ids: ['session-adversarial', hostile[9]] })
+  await raw('deleteResources', { id, paths: 'not-an-array' })
+
+  // 逃逸类载荷必须被拒（unsafe-path / resource-missing / no-ids / no-paths / 未知会话）
+  const deleteAttempts = envelopes.filter(entry => entry.endpoint === 'deleteResources')
+  ok(deleteAttempts.every(entry => entry.result.ok === true || entry.result.error?.code !== 'internal'), 'adversarial: no delete payload produces an internal error')
+  const escapes = deleteAttempts.filter(entry => Array.isArray(entry.result.value?.results) && entry.result.value.results.some(result => result.error?.code === 'unsafe-path'))
+  ok(escapes.length >= 3, `adversarial: traversal/absolute/root payloads are rejected as unsafe-path (got ${escapes.length})`)
+  ok(!existsSync(join(home, 'escape')) && !existsSync('/etc/passwd.dsm'), 'adversarial: nothing was written outside the workspace')
+  ok(existsSync(join(cwd, 'ok.txt')), 'adversarial: rejected payloads leave the workspace untouched')
+
+  // 对照组：同一会话上的合法删除仍然正常，且只留下这一条回收站记录
+  await raw('deleteResources', { id, paths: ['ok.txt'] })
+  const binIndex = JSON.parse(readFileSync(join(home, 'dsh-session-manager', 'recycle', 'index.json'), 'utf8')).entries
+  const mine = binIndex.filter(entry => entry.sessionId === id)
+  ok(mine.length === 1 && mine[0].originalPath === 'ok.txt', `adversarial: the bin holds only the legitimately deleted path for this session (got ${mine.map(entry => entry.originalPath).join(', ') || 'none'})`)
+  ok(!existsSync(join(cwd, 'ok.txt')), 'adversarial: the legitimate delete still works')
+
+  removeSessionFromCorpus(id)
+}
+
 // --- OS 废纸篓 helper：成败以结果判定（helper 退出码不可信） -----------------------
 {
   const { createTrash } = await import(new URL('../lifecycle/trash.js', import.meta.url).href)
