@@ -99,7 +99,10 @@ active → delete_requested → rolling_back → rollback_verified / rollback_fa
 
 - **打开**：仅本机文件管理器（Finder / Explorer / Linux 文件管理器），无应用选择器。
 - **批量选择**：全选 / 反选 / 删除所选 / 打开所选。
-- **单行删除 / 批量删除**：删除 = **双写**——先复制内容 + 元数据进**插件内回收站**，再移入**系统废纸篓**。失败逐条报错，绝不破坏原文件。
+- **单行删除 / 批量删除**：删除 = **双写**——先复制内容 + 元数据进**插件内回收站**，再移入**系统废纸篓**。绝不破坏原文件。
+- **删除进度条（0.4.4）**：批量删除在**弹窗内**（工具条与资源列表之间）逐文件推进度条 `正在删除 3/12`，`role=progressbar` + `aria-valuenow`，宽度按已完成比例填充；单行删除走同一条链路（total=1）。计数按「文件」而不是字节：宿主 `deleteResources` 一次只搬一个路径，也没有字节总量可换算。
+- **删除结果提示窗（0.4.4）**：无论成功还是失败，批量删除结束后都在弹窗**之上**再叠一层结果对话框（宿主 `Modal`，portal 到 body，`useModalLayer` 管理层栈，Esc 只关最上层）：标题按结局分「删除完成 / 部分删除失败 / 删除失败」，副标题给出 `共 N 项：成功 X 项，失败 Y 项`，失败逐条列出**路径 + 原因**（最多 8 条，其余折叠为「以及另外 N 个失败项」），必须点「关闭」确认。0.4.2 及以前的提示写在**会话管理页面**上，而弹窗会盖住页面，所以删除过程中用户什么都看不到。
+- **失败保持所选（0.4.4）**：结果窗关闭后，失败行仍是选中态，再点一次「删除所选」= 精确重试失败项。
 - **回收站区块**：列出本会话已删除的条目，每条带「恢复」按钮。
 
 ### 用户主动删除的资源
@@ -213,6 +216,8 @@ node scripts/build-client.mjs
 # 离线全量回归（无外部依赖）
 node scripts/smoke-host.mjs        # 66 项：RPC 契约 + manifest + 归档/删除/恢复
 node scripts/smoke-lifecycle.mjs   # 356 项：十场景 + 资源视图 + 回收站 + 用户删除链路
+node scripts/smoke-client.mjs      # 25 项：客户端链路——逐文件进度序列、成功/部分/全失败结果窗、
+                                   #      进度条 DOM 与 aria、失败项保留所选、弹窗中途关闭不出陈旧提示
 ```
 
 测试 seams：`DSH_SM_TRASH_DIR` 重定向废纸篓、`DSH_SM_OPEN_MODE=log` 记录命令而不弹出 Finder，保证跑测试不污染真机。
@@ -230,6 +235,14 @@ node scripts/smoke-lifecycle.mjs   # 356 项：十场景 + 资源视图 + 回收
 ---
 
 ## 变更记录
+
+### 0.4.4 — 会话资源删除：弹窗内进度条 + 成功/失败结果窗
+
+- **问题 1（进度可见）**：批量删除文件时界面毫无反馈。`deleteSelected` 只在首尾翻 `busy`，中间逐个 `await` 但不计数，页面唯一像「进度条」的东西是列表骨架屏 `.dsm-skeletonBar`（加载占位，与删除无关）。新增 `detail.progress`（`{done,total}`）+ `setDetailProgress`，`deletePaths` 每搬完一个文件推进一次，弹窗内渲染 `.dsm-resProgress`（`role=progressbar`），批次结束（含异常与中途关窗）在 `finally` 里清空。
+- **问题 2（提示窗）**：删除成功/失败的提示写在会话管理页 `.dsm-notice`，而资源弹窗盖在页面之上——删除时看不见，删除后如果弹窗被刷新也看不见。改为删除结束弹出结果对话框 `DeleteResultModal`：成功、部分失败、全失败三种标题，副标题计数，失败逐条「路径 + 原因」，需显式关闭；单行「删除」按钮走同一条 `deletePaths` 链路，同样出结果窗。`deleteOne` 不再自己写页面通知，改为返回 `{ok, reason}` 交给批次聚合。
+- **陈旧提示防护**：结果窗写在删除后的列表刷新**之后**（`openResources` 会重建 `detail` 对象），且再次核对当前弹窗仍是同一会话——中途关窗或切到别的会话不会收到上一批的结果窗。
+- **locale**：新增 `res.deleteProgress` + `res.result.*`（zh/en 同步）；删除已无用的 `res.batchDeleted` / `res.deleteFailed`（提示链路已从页面通知迁到结果窗）。
+- **回归**：新增 `scripts/smoke-client.mjs`（25 项，纯 Node、无需依赖）——用桩化 react / ui-primitives / defineStore 同步渲染整棵客户端树，断言进度序列 `idle→0/2→1/2→2/2→idle`、结果窗标题与失败明细、`aria-valuenow/max` 与填充宽度 25%、失败行保留所选、中途关窗不出陈旧结果窗。
 
 ### 0.4.2 — 会话资源删除链路修复 + 归档/删除后页面稳定
 

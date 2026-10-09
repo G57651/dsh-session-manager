@@ -1,3 +1,9 @@
+import { createElement, useCallback, useEffect, useMemo } from 'react'
+import { Button, Checkbox, Modal, Pill, SegmentedTabs } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconArchiveOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { defineStore } from '@deepseek-ai/dsh-client-store'
+import { zh, en } from './locales.js'
+import { cssText } from './styles.css.js'
 // dsh-session-manager — web client half.
 //
 // Builds into client.js via scripts/build-client.mjs, which serves this file
@@ -9,12 +15,6 @@
 //   - the only `export` statement is the trailing one, which becomes
 //     module.exports.
 
-import { createElement, useCallback, useEffect, useMemo } from 'react'
-import { Button, Checkbox, Modal, Pill, SegmentedTabs } from '@deepseek-ai/dsh-client-ui-primitives'
-import { IconArchiveOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import { defineStore } from '@deepseek-ai/dsh-client-store'
-import { zh, en } from './locales.js'
-import { cssText } from './styles.css.js'
 
 const NS = 'sessionManager'
 /** The id shared by the sidebar entry and the main panel it opens. */
@@ -160,7 +160,7 @@ function createManagerStore() {
       closeConfirmPurge: (draft) => { draft.confirmPurgeIds = null },
       // resource detail modal (0.2.x): one open detail at a time; the modal
       // owns its batch selection (open actions go through the OS file manager)
-      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false, bin: [] } },
+      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false, bin: [], progress: null, result: null } },
       toggleDetailSelect: (draft, key) => {
         if (draft.detail === null) return
         draft.detail.selected = draft.detail.selected.includes(key)
@@ -172,6 +172,21 @@ function createManagerStore() {
       },
       setDetailBusy: (draft, busy) => {
         if (draft.detail !== null) draft.detail.busy = busy === true
+      },
+      // Batch-delete progress lives in the modal, not on the page: while the
+      // resources dialog is open it covers the panel, so a page-level notice
+      // would be invisible at exactly the moment the user is watching.
+      setDetailProgress: (draft, progress) => {
+        if (draft.detail === null) return
+        draft.detail.progress = progress === null ? null : { done: progress.done, total: progress.total }
+      },
+      // The delete-result dialog. It is written AFTER the post-delete refresh,
+      // because openResources() rebuilds the detail object and would drop it.
+      setDetailResult: (draft, result) => {
+        if (draft.detail !== null) draft.detail.result = result
+      },
+      clearDetailResult: (draft) => {
+        if (draft.detail !== null) draft.detail.result = null
       },
       setDetailData: (draft, data) => {
         if (draft.detail !== null && draft.detail.id === data?.sessionId) {
@@ -347,52 +362,86 @@ function createController({ ctx, api, instance, extendSuppression }) {
     }
   }
 
-  /** Move one resource to the OS wastebasket (user-initiated, recoverable). */
+  /**
+   * Move one resource to the OS wastebasket (user-initiated, recoverable).
+   * Returns the outcome instead of raising a notice: the batch caller
+   * aggregates outcomes into the in-modal dialog, and a page-level notice is
+   * behind that dialog anyway.
+   */
   async function deleteOne(sessionId, path) {
     const result = await api.deleteResources(sessionId, [path])
     if (result?.ok !== true) {
       console.warn('[dsh-session-manager] deleteResources failed:', describeError(result?.error))
-      instance.actions.setNotice({ tone: 'error', text: t('res.deleteFailed', { reason: formatError(result?.error) }) })
-      return false
+      return { ok: false, reason: formatError(result?.error) }
     }
     const failed = (result.value?.results ?? []).filter(entry => entry.ok !== true)
     if (failed.length > 0) {
       const reason = formatError(failed[0]?.error)
       console.warn('[dsh-session-manager] deleteResources per-path failure:', reason)
-      instance.actions.setNotice({ tone: 'error', text: t('res.deleteFailed', { reason }) })
-      return false
+      return { ok: false, reason }
     }
-    return true
+    return { ok: true, reason: null }
+  }
+
+  /**
+   * Run one delete batch inside the resources modal: a progress bar that
+   * advances per file, then a result dialog covering success and failure.
+   * The count is per file (one wastebasket move per RPC), which is what the
+   * user waits on; the host reports no per-file byte totals to measure.
+   */
+  async function deletePaths(entries) {
+    const detail = instance.getSnapshot().detail
+    if (detail === null || detail.busy === true || entries.length === 0) return
+    const total = entries.length
+    const failures = []
+    let done = 0
+    instance.actions.setDetailBusy(true)
+    instance.actions.setDetailProgress({ done: 0, total })
+    try {
+      for (const entry of entries) {
+        const outcome = await deleteOne(detail.id, entry.path)
+        if (outcome.ok !== true) failures.push({ key: entry.key, path: entry.path, reason: outcome.reason })
+        done += 1
+        instance.actions.setDetailProgress({ done, total })
+      }
+    } finally {
+      instance.actions.setDetailBusy(false)
+      instance.actions.setDetailProgress(null)
+      // the paths are already off disk, so the list must re-read no matter how
+      // the loop ended — skipping this leaves deleted rows on screen
+      await openResources(detail.id, { refresh: true }).catch(() => {})
+    }
+    // the refresh rebuilt the detail object, so the dialog goes onto the new
+    // one — and only when the modal the user is looking at is still this
+    // session's: closing it mid-batch or opening another session must not get
+    // a stale result dialog.
+    const current = instance.getSnapshot().detail
+    if (current === null || current.id !== detail.id) return
+    instance.actions.setDetailResult({
+      tone: failures.length === 0 ? 'success' : failures.length === total ? 'error' : 'partial',
+      total,
+      deleted: total - failures.length,
+      failures,
+    })
+    // keep the failures selected so a second click retries exactly them
+    if (failures.length > 0) instance.actions.setDetailSelected(failures.map(entry => entry.key))
   }
 
   /** Batch-move every selected resource to the wastebasket, then refresh. */
-  async function deleteSelected() {
+  function deleteSelected() {
     const detail = instance.getSnapshot().detail
     if (detail === null || detail.busy === true) return
     const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
-    const targets = detail.selected
+    const entries = detail.selected
       .map(key => ({ key, row: rowsByKey.get(key) }))
       .filter(entry => entry.row !== undefined && OPENABLE_TYPES.has(entry.row.resourceType))
-    if (targets.length === 0) return
-    instance.actions.setDetailBusy(true)
-    const failedKeys = []
-    try {
-      for (const { key, row } of targets) {
-        const ok = await deleteOne(detail.id, row.identifier)
-        if (ok !== true) failedKeys.push(key)
-      }
-    } finally {
-      // the paths are already off disk, so the list must re-read no matter how
-      // the loop ended — skipping this leaves deleted rows on screen
-      instance.actions.setDetailBusy(false)
-      await openResources(detail.id, { refresh: true }).catch(() => {})
-    }
-    if (failedKeys.length > 0) {
-      // keep the failures selected so a second click retries exactly them
-      instance.actions.setDetailSelected(failedKeys)
-      return
-    }
-    instance.actions.setNotice({ tone: 'info', text: t('res.batchDeleted', { n: targets.length }) })
+      .map(entry => ({ key: entry.key, path: entry.row.identifier }))
+    return deletePaths(entries)
+  }
+
+  /** Delete one resource from its row: same progress + dialog as the batch. */
+  function deleteOneRow(row) {
+    return deletePaths([{ key: rowKeyOf(row), path: row.identifier }])
   }
 
   /** Restore one recycle-bin entry to its original workspace position. */
@@ -427,7 +476,7 @@ function createController({ ctx, api, instance, extendSuppression }) {
     }
   }
 
-  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteOne, deleteSelected, restoreBin, openWorkspace, dispose }
+  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteOne, deletePaths, deleteSelected, deleteOneRow, restoreBin, openWorkspace, dispose }
 }
 
 /** Stable per-row key used by the modal's batch selection. */
@@ -706,6 +755,42 @@ function statusPill(status, t) {
   })
 }
 
+/** Failed paths listed in the result dialog before the "and N more" line. */
+const RESULT_FAIL_PREVIEW = 8
+
+/**
+ * Delete-result dialog (0.4.4). Raised inside the resources modal after every
+ * delete — success and failure alike. The page-level notice it used to raise
+ * sits behind this modal, so while deleting the user saw no confirmation at
+ * all; the outcome now appears in front of them and needs an explicit close.
+ */
+function DeleteResultModal({ result, actions, t }) {
+  const failures = Array.isArray(result.failures) ? result.failures : []
+  const previews = failures.slice(0, RESULT_FAIL_PREVIEW)
+  const rest = Math.max(0, failures.length - previews.length)
+  const titleKey = result.tone === 'success' ? 'res.result.titleSuccess'
+    : result.tone === 'partial' ? 'res.result.titlePartial' : 'res.result.titleFailed'
+  return h(Modal, {
+    open: true,
+    onClose: actions.clearDetailResult,
+    title: t(titleKey),
+    description: t('res.result.summary', { total: result.total, deleted: result.deleted, failed: failures.length }),
+    closeLabel: t('action.closeModal'),
+    className: 'dsm-resultDialog',
+    footer: h(Button, { variant: 'primary', size: 'sm', onClick: actions.clearDetailResult }, t('action.closeModal')),
+  },
+    failures.length === 0
+      ? h('p', { className: 'dsm-resHint' }, t('res.result.allOk'))
+      : h('div', { className: 'dsm-resultFails' },
+          h('div', { className: 'dsm-resultFailsTitle' }, t('res.result.failList', { n: failures.length })),
+          h('ul', { className: 'dsm-resultList' },
+            previews.map((entry, index) => h('li', { key: `${entry.path}-${index}` },
+              h('span', { className: 'dsm-resultPath', title: entry.path }, entry.path),
+              h('span', { className: 'dsm-resultReason' }, entry.reason ?? ''))),
+            rest > 0 && h('li', { className: 'dsm-resultMore' }, t('res.result.more', { n: rest })))),
+  )
+}
+
 function ResourcesModal({ detail, actions, controller, t }) {
   const data = detail.data
   // A user-trashed resource reads status:'trashed' ONLY while it is really off
@@ -787,6 +872,26 @@ function ResourcesModal({ detail, actions, controller, t }) {
           }, t('res.openSelected', { n: detail.selected.length })),
         ),
 
+        // Delete progress (0.4.4): the batch is one wastebasket move per file,
+        // so the bar counts files. Rendered inside the modal because the modal
+        // covers the page — the old page-level notice was never visible here.
+        detail.progress !== null && h('div', {
+          key: 'progress',
+          className: 'dsm-resProgress',
+          role: 'progressbar',
+          'aria-valuemin': 0,
+          'aria-valuemax': detail.progress.total,
+          'aria-valuenow': detail.progress.done,
+          'aria-label': t('res.deleteProgress', { done: detail.progress.done, total: detail.progress.total }),
+        },
+          h('div', { className: 'dsm-resProgressTrack' },
+            h('div', {
+              className: cx('dsm-resProgressFill', detail.progress.done === detail.progress.total && 'dsm-resProgressFillDone'),
+              style: { width: `${Math.round((detail.progress.done / Math.max(1, detail.progress.total)) * 100)}%` },
+            })),
+          h('span', { className: 'dsm-resProgressText' }, t('res.deleteProgress', { done: detail.progress.done, total: detail.progress.total })),
+        ),
+
         RES_GROUP_ORDER.map(type => {
           const rows = groups.get(type)
           if (rows === undefined || rows.length === 0) return null
@@ -830,7 +935,7 @@ function ResourcesModal({ detail, actions, controller, t }) {
                       className: 'dsm-dangerButton',
                       'aria-label': t('res.deleteRow'),
                       disabled: detail.busy === true,
-                      onClick: () => void controller.deleteOne(detail.id, row.identifier).then(() => controller.openResources(detail.id, { refresh: true })),
+                      onClick: () => void controller.deleteOneRow(row),
                     }, t('res.deleteRow')),
                   ),
                 )
@@ -860,6 +965,11 @@ function ResourcesModal({ detail, actions, controller, t }) {
               ),
             ))),
         ),
+
+        // The outcome dialog for the last delete batch, success or failure. It
+        // portals to document.body, so nesting it here still floats it above
+        // the resources modal; closing it leaves the refreshed list underneath.
+        detail.result !== null && h(DeleteResultModal, { key: 'result', result: detail.result, actions, t }),
       ],
     ),
   )
@@ -1034,5 +1144,6 @@ function apply(ctx) {
 
   ctx.effect(() => () => controller.dispose(), 'dsh-session-manager: controller timers and event listeners')
 }
+
 
 export { inject, apply }
