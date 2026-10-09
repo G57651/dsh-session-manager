@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		var __modules = {
 			"./styles.css.js": function (require, module, exports) {
-				module.exports = { cssText: "/* dsh-session-manager — client styles, injected as a style tag by apply().\n   Class prefix .dsm- avoids collisions with the host. Colors, borders, and\n   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and\n   dark follow the host theme automatically; no theme selectors live here. */\n\n.dsm-page {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  box-sizing: border-box;\n  height: 100%;\n  min-width: 0;\n  min-height: 0;\n  padding: 24px clamp(20px, 4vw, 44px) 40px;\n  overflow: hidden;\n}\n\n.dsm-head {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n\n.dsm-headRow {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.dsm-title {\n  margin: 0;\n  font-size: 20px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-headActions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.dsm-tabs {\n  width: min(460px, 100%);\n}\n\n.dsm-list {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  border: 1px solid var(--dsw-alias-border-l1);\n  border-radius: var(--dsw-radius-md);\n  overflow-x: hidden;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-row {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  transition: background 120ms ease;\n}\n\n.dsm-row:last-child {\n  border-bottom: none;\n}\n\n.dsm-row:hover,\n.dsm-rowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-rowClickable {\n  cursor: pointer;\n}\n\n.dsm-checkCell {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n/* Keep the primitive checkbox's accessible label but hide its visible text:\n   the row title right next to it already says what this is. */\n.dsm-checkCell label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-rowMain {\n  display: flex;\n  flex: 1;\n  min-width: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.dsm-rowTitleLine {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-rowTitle {\n  overflow: hidden;\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowTitleMuted {\n  color: var(--dsw-alias-label-secondary);\n  font-weight: 400;\n}\n\n.dsm-pill {\n  flex: none;\n  padding: 1px 8px;\n  font-size: 11px;\n  line-height: 16px;\n  color: var(--dsw-alias-label-secondary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 999px;\n}\n\n.dsm-pillRunning {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-pillMissing {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-rowMeta {\n  overflow: hidden;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowActions {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 4px;\n  opacity: 0;\n  transition: opacity 120ms ease;\n}\n\n.dsm-row:hover .dsm-rowActions,\n.dsm-row:focus-within .dsm-rowActions {\n  opacity: 1;\n}\n\n.dsm-dangerButton.dsm-dangerButton {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-dangerFill.dsm-dangerFill {\n  background: var(--dsw-alias-state-error-primary);\n  color: var(--dsw-alias-bg-base);\n}\n\n.dsm-batchBar {\n  position: sticky;\n  bottom: 0;\n  z-index: 2;\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin-top: auto;\n  padding: 10px 14px;\n  background: var(--dsw-alias-bg-layer-1);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);\n}\n\n.dsm-batchCount {\n  flex: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-batchOps {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-stateBox {\n  display: flex;\n  flex: 1;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 56px 24px;\n  text-align: center;\n}\n\n.dsm-stateIcon {\n  color: var(--dsw-alias-label-tertiary);\n  opacity: 0.7;\n}\n\n.dsm-stateTitle {\n  margin: 0;\n  font-size: 14px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-stateHint {\n  margin: 0;\n  max-width: 420px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n\n.dsm-notice {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 8px 12px;\n  font-size: 12px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-noticeError {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-noticeInfo {\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-noticeClose {\n  flex: none;\n  padding: 0 4px;\n  font-size: 14px;\n  line-height: 1;\n  color: inherit;\n  background: none;\n  border: none;\n  cursor: pointer;\n}\n\n.dsm-purgeList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-purgeList li {\n  padding: 3px 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-skeletonRow {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 12px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n}\n\n.dsm-skeletonRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-skeletonBar {\n  height: 10px;\n  border-radius: 4px;\n  background: var(--dsw-alias-interactive-bg-hover);\n  animation: dsm-pulse 1.4s ease-in-out infinite;\n}\n\n.dsm-skeletonBarShort {\n  width: 40%;\n}\n\n@keyframes dsm-pulse {\n  0%,\n  100% {\n    opacity: 0.55;\n  }\n  50% {\n    opacity: 1;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-skeletonBar {\n    animation: none;\n  }\n\n  .dsm-row,\n  .dsm-rowActions {\n    transition: none;\n  }\n}\n\n/* --- resource detail modal (0.2.x) ---------------------------------------- */\n\n.dsm-resDialog {\n  /* the host dialog is 380px wide with overflow:hidden — widen it for the\n     resource table; height is capped by the modal's own padding box */\n  width: min(860px, 100%);\n  max-height: 100%;\n}\n\n.dsm-resContent {\n  min-height: 0;\n  max-height: 100%;\n  overflow: hidden;\n}\n\n/* the Modal's own .body wrapper sits between .content and our scroller;\n   without min-height:0 the flex chain cannot shrink and the list clips\n   instead of scrolling (the \"cannot scroll with many files\" bug) */\n.dsm-resContent > div:last-child {\n  min-height: 0;\n  max-height: 100%;\n}\n\n.dsm-resBody {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  flex: 1 1 auto;\n  min-height: 0;\n  max-height: 100%;\n  overflow: auto;\n  overscroll-behavior: contain;\n}\n\n.dsm-resMetaLine {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: baseline;\n  gap: 4px 14px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resCwd {\n  overflow-wrap: anywhere;\n}\n\n.dsm-resConflicts {\n  padding: 8px 10px;\n  font-size: 12px;\n  color: var(--dsw-alias-state-error-primary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resGroup {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n}\n\n.dsm-resGroupTitle {\n  margin: 6px 0 2px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resGroupList {\n  display: flex;\n  flex-direction: column;\n}\n\n.dsm-resRow {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 5px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\n}\n\n.dsm-resRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-resMain {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.dsm-resId {\n  font-size: 13px;\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resExtra {\n  margin-top: 1px;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resPills {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-pillOwn {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-resHint {\n  margin: 0;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resHintError {\n  color: var(--dsw-alias-state-error-primary);\n}\n\n.dsm-resToolbar {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  padding: 8px 10px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resToolbarHint {\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n  margin-right: auto;\n}\n\n.dsm-resCheck {\n  display: flex;\n  flex: none;\n  align-items: center;\n  max-width: 32px;\n}\n\n/* Keep the checkbox's accessible label but hide its visible text: the path\n   column next to it already identifies the row. Without this the long label\n   swallows the whole row width and squeezes the path into a sliver. */\n.dsm-resCheck label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-resRowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-resBinSection {\n  border-top: 1px solid var(--dsw-alias-border-l1);\n  margin-top: 8px;\n  padding-top: 8px;\n}\n\n/* --- delete progress + result dialog (0.4.4) ------------------------------ */\n\n/* The bar sits between the toolbar and the resource list, inside the modal:\n   the page-level notice it replaces was behind the dialog and never visible. */\n.dsm-resProgress {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  background: var(--dsw-alias-bg-layer-1);\n}\n\n.dsm-resProgressTrack {\n  flex: 1 1 auto;\n  height: 6px;\n  min-width: 60px;\n  overflow: hidden;\n  border-radius: 999px;\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-resProgressFill {\n  height: 100%;\n  border-radius: 999px;\n  background: var(--dsw-alias-state-error-primary);\n  transition: width 120ms ease;\n}\n\n.dsm-resProgressFillDone {\n  background: var(--dsw-alias-state-success-primary);\n}\n\n.dsm-resProgressText {\n  flex: none;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n  color: var(--dsw-alias-label-secondary);\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-resProgressFill {\n    transition: none;\n  }\n}\n\n/* nested outcome dialog: narrower than the resource table it floats over */\n.dsm-resultDialog {\n  width: min(560px, 100%);\n}\n\n.dsm-resultFails {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n\n.dsm-resultFailsTitle {\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-state-error-primary);\n}\n\n.dsm-resultList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  max-height: 260px;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-resultList li {\n  display: flex;\n  flex-direction: column;\n  gap: 1px;\n  padding: 4px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  font-size: 12px;\n}\n\n.dsm-resultList li:last-child {\n  border-bottom: none;\n}\n\n.dsm-resultPath {\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resultReason {\n  color: var(--dsw-alias-state-error-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resultMore {\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n" };
+				module.exports = { cssText: "/* dsh-session-manager — client styles, injected as a style tag by apply().\n   Class prefix .dsm- avoids collisions with the host. Colors, borders, and\n   radii ride --dsw-alias-* / --dsw-radius-* semantic tokens only, so light and\n   dark follow the host theme automatically; no theme selectors live here. */\n\n.dsm-page {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  box-sizing: border-box;\n  height: 100%;\n  min-width: 0;\n  min-height: 0;\n  padding: 24px clamp(20px, 4vw, 44px) 40px;\n  overflow: hidden;\n}\n\n.dsm-head {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n\n.dsm-headRow {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.dsm-title {\n  margin: 0;\n  font-size: 20px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-headActions {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.dsm-tabs {\n  width: min(460px, 100%);\n}\n\n.dsm-list {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  border: 1px solid var(--dsw-alias-border-l1);\n  border-radius: var(--dsw-radius-md);\n  overflow-x: hidden;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-row {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  padding: 10px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  transition: background 120ms ease;\n}\n\n.dsm-row:last-child {\n  border-bottom: none;\n}\n\n.dsm-row:hover,\n.dsm-rowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-rowClickable {\n  cursor: pointer;\n}\n\n.dsm-checkCell {\n  display: flex;\n  flex: none;\n  align-items: center;\n}\n\n/* Keep the primitive checkbox's accessible label but hide its visible text:\n   the row title right next to it already says what this is. */\n.dsm-checkCell label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-rowMain {\n  display: flex;\n  flex: 1;\n  min-width: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.dsm-rowTitleLine {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-rowTitle {\n  overflow: hidden;\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowTitleMuted {\n  color: var(--dsw-alias-label-secondary);\n  font-weight: 400;\n}\n\n.dsm-pill {\n  flex: none;\n  padding: 1px 8px;\n  font-size: 11px;\n  line-height: 16px;\n  color: var(--dsw-alias-label-secondary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: 999px;\n}\n\n.dsm-pillRunning {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-pillMissing {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-rowMeta {\n  overflow: hidden;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-rowActions {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 4px;\n  opacity: 0;\n  transition: opacity 120ms ease;\n}\n\n.dsm-row:hover .dsm-rowActions,\n.dsm-row:focus-within .dsm-rowActions {\n  opacity: 1;\n}\n\n.dsm-dangerButton.dsm-dangerButton {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-dangerFill.dsm-dangerFill {\n  background: var(--dsw-alias-state-error-primary);\n  color: var(--dsw-alias-bg-base);\n}\n\n.dsm-batchBar {\n  position: sticky;\n  bottom: 0;\n  z-index: 2;\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin-top: auto;\n  padding: 10px 14px;\n  background: var(--dsw-alias-bg-layer-1);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);\n}\n\n.dsm-batchCount {\n  flex: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-batchOps {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-stateBox {\n  display: flex;\n  flex: 1;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 56px 24px;\n  text-align: center;\n}\n\n.dsm-stateIcon {\n  color: var(--dsw-alias-label-tertiary);\n  opacity: 0.7;\n}\n\n.dsm-stateTitle {\n  margin: 0;\n  font-size: 14px;\n  font-weight: 500;\n  color: var(--dsw-alias-label-primary);\n}\n\n.dsm-stateHint {\n  margin: 0;\n  max-width: 420px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n\n.dsm-notice {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 8px 12px;\n  font-size: 12px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-sm);\n}\n\n.dsm-noticeError {\n  color: var(--dsw-alias-state-error-primary);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-noticeInfo {\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-noticeClose {\n  flex: none;\n  padding: 0 4px;\n  font-size: 14px;\n  line-height: 1;\n  color: inherit;\n  background: none;\n  border: none;\n  cursor: pointer;\n}\n\n.dsm-purgeList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-purgeList li {\n  padding: 3px 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.dsm-skeletonRow {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 12px 14px;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n}\n\n.dsm-skeletonRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-skeletonBar {\n  height: 10px;\n  border-radius: 4px;\n  background: var(--dsw-alias-interactive-bg-hover);\n  animation: dsm-pulse 1.4s ease-in-out infinite;\n}\n\n.dsm-skeletonBarShort {\n  width: 40%;\n}\n\n@keyframes dsm-pulse {\n  0%,\n  100% {\n    opacity: 0.55;\n  }\n  50% {\n    opacity: 1;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-skeletonBar {\n    animation: none;\n  }\n\n  .dsm-row,\n  .dsm-rowActions {\n    transition: none;\n  }\n}\n\n/* --- resource detail modal (0.2.x) ---------------------------------------- */\n\n.dsm-resDialog {\n  /* the host dialog is 380px wide with overflow:hidden — widen it for the\n     resource table; height is capped by the modal's own padding box */\n  width: min(860px, 100%);\n  max-height: 100%;\n}\n\n.dsm-resContent {\n  min-height: 0;\n  max-height: 100%;\n  overflow: hidden;\n}\n\n/* the Modal's own .body wrapper sits between .content and our scroller;\n   without min-height:0 the flex chain cannot shrink and the list clips\n   instead of scrolling (the \"cannot scroll with many files\" bug) */\n.dsm-resContent > div:last-child {\n  min-height: 0;\n  max-height: 100%;\n}\n\n.dsm-resBody {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  flex: 1 1 auto;\n  min-height: 0;\n  max-height: 100%;\n  overflow: auto;\n  overscroll-behavior: contain;\n}\n\n.dsm-resMetaLine {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: baseline;\n  gap: 4px 14px;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resCwd {\n  overflow-wrap: anywhere;\n}\n\n.dsm-resConflicts {\n  padding: 8px 10px;\n  font-size: 12px;\n  color: var(--dsw-alias-state-error-primary);\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resGroup {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n}\n\n.dsm-resGroupTitle {\n  margin: 6px 0 2px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resGroupList {\n  display: flex;\n  flex-direction: column;\n}\n\n.dsm-resRow {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 5px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\n}\n\n.dsm-resRow:last-child {\n  border-bottom: none;\n}\n\n.dsm-resMain {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n\n.dsm-resId {\n  font-size: 13px;\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resExtra {\n  margin-top: 1px;\n  font-size: 11px;\n  color: var(--dsw-alias-label-tertiary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resPills {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: 6px;\n}\n\n.dsm-pillOwn {\n  color: var(--dsw-alias-link);\n  border-color: var(--dsw-alias-border-l4);\n}\n\n.dsm-resHint {\n  margin: 0;\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.dsm-resHintError {\n  color: var(--dsw-alias-state-error-primary);\n}\n\n.dsm-resToolbar {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  padding: 8px 10px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n}\n\n.dsm-resToolbarHint {\n  font-size: 12px;\n  color: var(--dsw-alias-label-secondary);\n  margin-right: auto;\n}\n\n.dsm-resCheck {\n  display: flex;\n  flex: none;\n  align-items: center;\n  max-width: 32px;\n}\n\n/* Keep the checkbox's accessible label but hide its visible text: the path\n   column next to it already identifies the row. Without this the long label\n   swallows the whole row width and squeezes the path into a sliver. */\n.dsm-resCheck label > span {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n}\n\n.dsm-resRowSelected {\n  background: var(--dsw-alias-interactive-bg-hover);\n  border-radius: var(--dsw-radius-sm);\n}\n\n/* Recycle-bin dialog (0.5.0): a narrower window over the resource table, the\n   section it replaces sat at the bottom of that table. */\n.dsm-binDialog {\n  width: min(720px, 100%);\n}\n\n.dsm-binBody {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-height: 0;\n  max-height: 52vh;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n/* --- delete progress + result dialog (0.4.4) ------------------------------ */\n\n/* The bar sits between the toolbar and the resource list, inside the modal:\n   the page-level notice it replaces was behind the dialog and never visible. */\n.dsm-resProgress {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border: 1px solid var(--dsw-alias-border-l2);\n  border-radius: var(--dsw-radius-md);\n  background: var(--dsw-alias-bg-layer-1);\n}\n\n.dsm-resProgressTrack {\n  flex: 1 1 auto;\n  height: 6px;\n  min-width: 60px;\n  overflow: hidden;\n  border-radius: 999px;\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n.dsm-resProgressFill {\n  height: 100%;\n  border-radius: 999px;\n  background: var(--dsw-alias-state-error-primary);\n  transition: width 120ms ease;\n}\n\n.dsm-resProgressFillDone {\n  background: var(--dsw-alias-state-success-primary);\n}\n\n.dsm-resProgressText {\n  flex: none;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n  color: var(--dsw-alias-label-secondary);\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .dsm-resProgressFill {\n    transition: none;\n  }\n}\n\n/* nested outcome dialog: narrower than the resource table it floats over */\n.dsm-resultDialog {\n  width: min(560px, 100%);\n}\n\n.dsm-resultFails {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n\n.dsm-resultFailsTitle {\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--dsw-alias-state-error-primary);\n}\n\n.dsm-resultList {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  max-height: 260px;\n  overflow-y: auto;\n  scrollbar-gutter: stable;\n  --dsh-scrollbar-width: 9px;\n  --dsh-scrollbar-thumb-border: 2px;\n}\n\n.dsm-resultList li {\n  display: flex;\n  flex-direction: column;\n  gap: 1px;\n  padding: 4px 0;\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\n  font-size: 12px;\n}\n\n.dsm-resultList li:last-child {\n  border-bottom: none;\n}\n\n.dsm-resultPath {\n  color: var(--dsw-alias-label-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resultReason {\n  color: var(--dsw-alias-state-error-primary);\n  overflow-wrap: anywhere;\n}\n\n.dsm-resultMore {\n  font-size: 12px;\n  color: var(--dsw-alias-label-tertiary);\n}\n" };
 			},
 			"./locales.js": function (require, module, exports) {
 
@@ -77,17 +77,15 @@ window.__ModuleLoader__.load({
 				  'res.result.titlePartial': '部分删除失败',
 				  'res.result.titleFailed': '删除失败',
 				  'res.result.summary': '共 {total} 项：成功 {deleted} 项，失败 {failed} 项',
-				  'res.result.allOk': '所选文件已全部移入本机废纸篓，可在下方回收站或系统废纸篓恢复。',
+				  'res.result.allOk': '所选文件已全部移入本机废纸篓，可点工具条上的「回收站」恢复。',
 				  'res.result.failList': '失败明细 · {n} 项',
 				  'res.result.more': '以及另外 {n} 个失败项',
 				  'res.selectAll': '全选',
 				  'res.invert': '反选',
 				  'res.open': '打开',
 				  'res.openWorkspace': '打开工作区',
-				  'res.openSelected': '打开所选（{n}）',
 				  'res.select': '选择 {name}',
 				  'res.openFailed': '打开失败（{reason}）',
-				  'res.batchOpened': '已发送 {n} 个打开请求',
 				  'res.loading': '正在加载资源…',
 				  'res.cleanup': '清理状态',
 				  'res.cleanup.active': '跟踪中',
@@ -114,6 +112,9 @@ window.__ModuleLoader__.load({
 				  'res.group.process': '进程',
 				  'res.group.other': '其他',
 				  'res.binTitle': '回收站',
+				  'res.binButton': '回收站（{n}）',
+				  'res.binDialogHint': '本会话删掉的资源；恢复会写回原位，原位已有同名文件时拒绝覆盖。',
+				  'res.binEmpty': '回收站是空的。删除过的文件会出现在这里。',
 				  'res.restore': '恢复',
 				  'res.restoreFailed': '恢复失败（{reason}）',
 				  'res.restored': '已恢复 {name}',
@@ -198,17 +199,15 @@ window.__ModuleLoader__.load({
 				  'res.result.titlePartial': 'Some deletions failed',
 				  'res.result.titleFailed': 'Deletion failed',
 				  'res.result.summary': '{total} selected: {deleted} deleted, {failed} failed',
-				  'res.result.allOk': 'Every selected file moved to the wastebasket; restore it from the bin below or in the OS trash.',
+				  'res.result.allOk': 'Every selected file moved to the wastebasket; open the Recycle bin button in the toolbar to restore it.',
 				  'res.result.failList': 'Failures ({n})',
 				  'res.result.more': 'and {n} more failed item(s)',
 				  'res.selectAll': 'Select all',
 				  'res.invert': 'Invert',
 				  'res.open': 'Open',
 				  'res.openWorkspace': 'Open workspace',
-				  'res.openSelected': 'Open selected ({n})',
 				  'res.select': 'Select {name}',
 				  'res.openFailed': 'Open failed ({reason})',
-				  'res.batchOpened': '{n} open request(s) sent',
 				  'res.loading': 'Loading resources…',
 				  'res.cleanup': 'Cleanup',
 				  'res.cleanup.active': 'Tracking',
@@ -235,6 +234,9 @@ window.__ModuleLoader__.load({
 				  'res.group.process': 'Processes',
 				  'res.group.other': 'Other',
 				  'res.binTitle': 'Recycle bin',
+				  'res.binButton': 'Recycle bin ({n})',
+				  'res.binDialogHint': 'Resources this session deleted. Restoring writes them back to their original path and refuses to overwrite an existing one.',
+				  'res.binEmpty': 'The bin is empty. Files you delete show up here.',
 				  'res.restore': 'Restore',
 				  'res.restoreFailed': 'Restore failed ({reason})',
 				  'res.restored': 'Restored {name}',
@@ -377,6 +379,10 @@ window.__ModuleLoader__.load({
 		      noticeDismissed: false,
 		      config: { confirmPurge: true, autoRefresh: true },
 		      detail: null,
+		      // Recycle-bin dialog (0.5.0): open flag + its own outcome line. Kept at
+		      // the top level because the post-restore refresh rebuilds `detail`.
+		      binOpen: false,
+		      binNotice: null,
 		    }),
 		    actions: {
 		      setConfig: (draft, config) => { draft.config = config },
@@ -432,6 +438,8 @@ window.__ModuleLoader__.load({
 		      // resource detail modal (0.2.x): one open detail at a time; the modal
 		      // owns its batch selection (open actions go through the OS file manager)
 		      openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false, bin: [], progress: null, result: null } },
+		      /** Leaving the resources modal takes its dialogs with it: no stale bin. */
+		      closeDetail: (draft) => { draft.detail = null; draft.binOpen = false; draft.binNotice = null },
 		      toggleDetailSelect: (draft, key) => {
 		        if (draft.detail === null) return
 		        draft.detail.selected = draft.detail.selected.includes(key)
@@ -459,6 +467,20 @@ window.__ModuleLoader__.load({
 		      clearDetailResult: (draft) => {
 		        if (draft.detail !== null) draft.detail.result = null
 		      },
+		      // Only one dialog at a time over the resource table: the outcome of a
+		      // delete and the bin would otherwise stack on top of each other.
+		      openBin: (draft) => {
+		        draft.binOpen = true
+		        draft.binNotice = null
+		        if (draft.detail !== null) draft.detail.result = null
+		      },
+		      closeBin: (draft) => {
+		        draft.binOpen = false
+		        draft.binNotice = null
+		      },
+		      setBinNotice: (draft, notice) => {
+		        if (draft.binOpen === true) draft.binNotice = notice
+		      },
 		      setDetailData: (draft, data) => {
 		        if (draft.detail !== null && draft.detail.id === data?.sessionId) {
 		          draft.detail.loading = false
@@ -477,7 +499,6 @@ window.__ModuleLoader__.load({
 		          draft.detail.error = message
 		        }
 		      },
-		      closeDetail: (draft) => { draft.detail = null },
 		    },
 		  })
 		}
@@ -613,26 +634,6 @@ window.__ModuleLoader__.load({
 		    return true
 		  }
 
-		  /** Batch-open every selected resource; failures surface per-row. */
-		  async function openSelected() {
-		    const detail = instance.getSnapshot().detail
-		    if (detail === null || detail.busy === true) return
-		    const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
-		    const targets = detail.selected.map(key => rowsByKey.get(key)).filter(row => row !== undefined)
-		    if (targets.length === 0) return
-		    instance.actions.setDetailBusy(true)
-		    let failures = 0
-		    for (const row of targets) {
-		      const opened = await openOne(detail.id, row.identifier)
-		      if (opened !== true) failures += 1
-		    }
-		    instance.actions.setDetailBusy(false)
-		    if (failures === 0) {
-		      instance.actions.setNotice({ tone: 'info', text: t('res.batchOpened', { n: targets.length }) })
-		      instance.actions.setDetailSelected([])
-		    }
-		  }
-
 		  /**
 		   * Move one resource to the OS wastebasket (user-initiated, recoverable).
 		   * Returns the outcome instead of raising a notice: the batch caller
@@ -715,20 +716,28 @@ window.__ModuleLoader__.load({
 		    return deletePaths([{ key: rowKeyOf(row), path: row.identifier }])
 		  }
 
-		  /** Restore one recycle-bin entry to its original workspace position. */
+		  /**
+		   * Restore one recycle-bin entry to its original workspace position.
+		   * The outcome is reported inside the bin dialog (0.5.0): the page notice it
+		   * used to raise sits behind that dialog, so a failed restore looked like a
+		   * silent no-op.
+		   */
 		  async function restoreBin(entryId) {
 		    const detail = instance.getSnapshot().detail
 		    if (detail === null || detail.busy === true) return false
 		    instance.actions.setDetailBusy(true)
 		    const result = await api.recycleRestore(entryId)
 		    instance.actions.setDetailBusy(false)
+		    const restoredPath = result?.ok === true ? result.value?.originalPath ?? '' : null
+		    await openResources(detail.id, { refresh: true }).catch(() => {})
+		    // the refresh rebuilt the detail object; the dialog and its line go on the
+		    // top-level bin state, so they outlive it
 		    if (result?.ok !== true) {
 		      console.warn('[dsh-session-manager] recycleRestore failed:', describeError(result?.error))
-		      instance.actions.setNotice({ tone: 'error', text: t('res.restoreFailed', { reason: formatError(result?.error) }) })
+		      instance.actions.setBinNotice({ tone: 'error', text: t('res.restoreFailed', { reason: formatError(result?.error) }) })
 		      return false
 		    }
-		    instance.actions.setNotice({ tone: 'info', text: t('res.restored', { name: result.value?.originalPath ?? '' }) })
-		    await openResources(detail.id, { refresh: true }).catch(() => {})
+		    instance.actions.setBinNotice({ tone: 'info', text: t('res.restored', { name: restoredPath }) })
 		    return true
 		  }
 
@@ -747,7 +756,7 @@ window.__ModuleLoader__.load({
 		    }
 		  }
 
-		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteOne, deletePaths, deleteSelected, deleteOneRow, restoreBin, openWorkspace, dispose }
+		  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, deleteOne, deletePaths, deleteSelected, deleteOneRow, restoreBin, openWorkspace, dispose }
 		}
 
 		/** Stable per-row key used by the modal's batch selection. */
@@ -1062,7 +1071,50 @@ window.__ModuleLoader__.load({
 		  )
 		}
 
-		function ResourcesModal({ detail, actions, controller, t }) {
+		/**
+		 * Recycle-bin dialog (0.5.0). The bin used to be a section at the very bottom
+		 * of the resource table: with a hundred tracked paths the user had to scroll
+		 * past all of them to find a file they just deleted. It now opens from the
+		 * toolbar, and a restore reports its outcome inside the dialog — the page
+		 * notice it used to raise is behind this dialog, so a failed restore looked
+		 * like a silent no-op.
+		 */
+		function BinModal({ detail, binEntries, notice, actions, controller, t }) {
+		  return h(Modal, {
+		    open: true,
+		    onClose: actions.closeBin,
+		    title: `${t('res.binTitle')} · ${binEntries.length}`,
+		    description: t('res.binDialogHint'),
+		    closeLabel: t('action.closeModal'),
+		    className: 'dsm-binDialog',
+		    footer: h(Button, { variant: 'primary', size: 'sm', onClick: actions.closeBin }, t('action.closeModal')),
+		  },
+		    h('div', { className: 'dsm-binBody' },
+		      notice !== null && h('div', { className: cx('dsm-notice', notice.tone === 'error' ? 'dsm-noticeError' : 'dsm-noticeInfo'), role: 'status' },
+		        h('span', null, notice.text)),
+		      binEntries.length === 0
+		        ? h('p', { className: 'dsm-resHint' }, t('res.binEmpty'))
+		        : h('div', { className: 'dsm-resGroupList' },
+		            binEntries.map(entry => h('div', { key: entry.entryId, className: 'dsm-resRow' },
+		              h('div', { className: 'dsm-resMain' },
+		                h('div', { className: 'dsm-resId' }, entry.originalPath),
+		                h('div', { className: 'dsm-resExtra' }, [
+		                  entry.type === 'directory' ? t('res.binDir') : null,
+		                ].filter(Boolean).join(' · ')),
+		              ),
+		              h('div', { className: 'dsm-resPills' },
+		                h(Button, {
+		                  variant: 'ghost',
+		                  size: 'sm',
+		                  disabled: detail.busy === true,
+		                  onClick: () => void controller.restoreBin(entry.entryId),
+		                }, t('res.restore'))),
+		            ))),
+		    ),
+		  )
+		}
+
+		function ResourcesModal({ detail, actions, controller, t, binOpen, notice }) {
 		  const data = detail.data
 		  // A user-trashed resource reads status:'trashed' ONLY while it is really off
 		  // disk — the host flips it back to 'present' the moment it is restored (from
@@ -1134,13 +1186,16 @@ window.__ModuleLoader__.load({
 		            disabled: detail.selected.length === 0 || detail.busy === true,
 		            onClick: () => void controller.deleteSelected(),
 		          }, t('res.deleteSelected', { n: detail.selected.length })),
+		          // 0.5.0: this slot used to be 「打开所选」. The bin lived at the very
+		          // bottom of the table — past every tracked path — so it is opened
+		          // from here instead, at the same rank as the delete action.
 		          h(Button, {
-		            key: 'batch',
+		            key: 'bin',
 		            variant: 'ghost',
 		            size: 'sm',
-		            disabled: detail.selected.length === 0 || detail.busy === true,
-		            onClick: () => void controller.openSelected(),
-		          }, t('res.openSelected', { n: detail.selected.length })),
+		            disabled: detail.busy === true,
+		            onClick: () => actions.openBin(),
+		          }, t('res.binButton', { n: binEntries.length })),
 		        ),
 
 		        // Delete progress (0.4.4): the batch is one wastebasket move per file,
@@ -1214,33 +1269,21 @@ window.__ModuleLoader__.load({
 		          )
 		        }),
 
-		        // --- 回收站区块：当前会话被删除的资源，可恢复到原位 ---
-		        binEntries.length > 0 && h('div', { key: 'binSection', className: 'dsm-resGroup dsm-resBinSection' },
-		          h('div', { className: 'dsm-resGroupTitle' }, `${t('res.binTitle')} · ${binEntries.length}`),
-		          h('div', { className: 'dsm-resGroupList' },
-		            binEntries.map(entry => h('div', { key: entry.entryId, className: 'dsm-resRow' },
-		              h('div', { className: 'dsm-resMain' },
-		                h('div', { className: 'dsm-resId' }, entry.originalPath),
-		                h('div', { className: 'dsm-resExtra' }, [
-		                  entry.type === 'directory' ? t('res.binDir') : null,
-		                ].filter(Boolean).join(' · ')),
-		              ),
-		              h('div', { className: 'dsm-resPills' },
-		                h(Button, {
-		                  key: 'restore',
-		                  variant: 'ghost',
-		                  size: 'sm',
-		                  disabled: detail.busy === true,
-		                  onClick: () => void controller.restoreBin(entry.entryId),
-		                }, t('res.restore')),
-		              ),
-		            ))),
-		        ),
-
+		        // (0.5.0) The bin section that used to sit here — below every resource
+		        // group — is gone; it now opens as BinModal from the toolbar.
 		        // The outcome dialog for the last delete batch, success or failure. It
 		        // portals to document.body, so nesting it here still floats it above
 		        // the resources modal; closing it leaves the refreshed list underneath.
 		        detail.result !== null && h(DeleteResultModal, { key: 'result', result: detail.result, actions, t }),
+		        binOpen === true && h(BinModal, {
+		          key: 'bin',
+		          detail,
+		          binEntries,
+		          notice,
+		          actions,
+		          controller,
+		          t,
+		        }),
 		      ],
 		    ),
 		  )
@@ -1258,6 +1301,8 @@ window.__ModuleLoader__.load({
 		  const selectedIds = useStore(s => s.selectedIds)
 		  const confirmPurgeIds = useStore(s => s.confirmPurgeIds)
 		  const detail = useStore(s => s.detail)
+		  const binOpen = useStore(s => s.binOpen)
+		  const binNotice = useStore(s => s.binNotice)
 		  const config = useStore(s => s.config)
 		  const sources = useStore(s => s.sources)
 		  const noticeDismissed = useStore(s => s.noticeDismissed)
@@ -1325,7 +1370,7 @@ window.__ModuleLoader__.load({
 		              }))),
 		    selectMode && h(BatchBar, { view, rows, selectedIds, actions, controller, t, config }),
 		    confirmPurgeIds !== null && h(PurgeConfirmModal, { ids: confirmPurgeIds, rows, actions, controller, t }),
-		    detail !== null && h(ResourcesModal, { detail, actions, controller, t }),
+		    detail !== null && h(ResourcesModal, { detail, actions, controller, t, binOpen, notice: binNotice }),
 		  )
 		}
 

@@ -120,6 +120,12 @@ const resources = [
 
 let rpcCalls = []
 let deleteCalls = 0
+// the session's plugin-side recycle bin, served by recycleList / recycleRestore
+let binEntries = [
+  { entryId: 'entry-1', originalPath: '/tmp/project/deleted.txt', type: 'file' },
+  { entryId: 'entry-2', originalPath: '/tmp/project/olddir', type: 'directory' },
+]
+let restoreMode = 'ok'
 let onFirstDelete = null
 let failMode = 'one'
 
@@ -137,7 +143,15 @@ const connection = {
         case 'list': return envelope({ rows: [{ id: SESSION, title: 'A', cwd: '/tmp/project', updatedAt: Date.now(), archived: false, deleted: false, running: false }], counts: { all: 1, archived: 0, deleted: 0 }, sources: { available: true } })
         case 'resources': return envelope({ sessionId: SESSION, tracked: true, resources, baseline: { fileCount: 3, cwd: '/tmp/project' } })
         case 'cleanupStatus': return envelope({ results: [{ cleanup: { state: 'active' } }] })
-        case 'recycleList': return envelope({ entries: [] })
+        case 'recycleList': return envelope({ entries: binEntries })
+        case 'recycleRestore': {
+          const id = payload.entryId
+          // the host answers a refused restore with a failure envelope, not a
+          // per-entry result row (index.js recycleRestore handler)
+          if (restoreMode === 'fail') return { ok: false, error: { code: 'EEXIST', message: 'target exists', details: {} } }
+          binEntries = binEntries.filter(entry => entry.entryId !== id)
+          return envelope({ ok: true, entryId: id, originalPath: '/tmp/project/deleted.txt' })
+        }
         case 'deleteResources': {
           deleteCalls += 1
           if (onFirstDelete !== null) { const hook = onFirstDelete; onFirstDelete = null; hook() }
@@ -320,6 +334,68 @@ rpcCalls = []
 await controller.runOp('deleteSoft', [SESSION], ctx.locale.bind('sessionManager'))
 ok(rpcCalls.some(entry => entry.endpoint === 'delete'), 'session delete still routes to the delete endpoint')
 
+
+// --- 9. 回收站：工具条入口 + 独立弹窗（0.5.0）--------------------------------
+
+await controller.openResources(SESSION)
+const toolbarTree = renderPage(instance.getSnapshot())
+const toolbarTexts = findNode(toolbarTree, node => node.type === 'Button').map(node => JSON.stringify(node.children))
+ok(toolbarTexts.some(text => text.includes('打开所选')) === false, '「打开所选」按钮已从工具条移除')
+ok(toolbarTexts.some(text => text.includes('回收站（2）')) === true, '工具条出现「回收站（2）」入口')
+ok(findNode(toolbarTree, node => node.props?.className === 'dsm-resBinSection').length === 0, '列表底部的回收站区块已删除')
+ok(findNode(toolbarTree, node => node.props?.className === 'dsm-binDialog').length === 0, '回收站弹窗默认不渲染')
+
+instance.actions.openBin()
+const binTree = renderPage(instance.getSnapshot())
+const binDialog = findNode(binTree, node => node.props?.className === 'dsm-binDialog')
+ok(binDialog.length === 1, '点工具条「回收站」弹出独立弹窗')
+ok(binDialog[0].props.title === '回收站 · 2', '弹窗标题带条目数')
+const restoreButtons = findNode(binDialog[0], node => node.type === 'Button' && JSON.stringify(node.children).includes('"恢复"'))
+ok(restoreButtons.length === 2, '每条回收站条目都有「恢复」按钮')
+ok(findNode(binDialog[0], node => node.type === 'div' && node.props?.className === 'dsm-resId').map(node => node.children[0]).join(',') === '/tmp/project/deleted.txt,/tmp/project/olddir', '弹窗列出原始路径')
+
+// 结果窗与回收站弹窗互斥，不叠两层
+instance.actions.setDetailResult({ tone: 'success', total: 1, deleted: 1, failures: [] })
+instance.actions.openBin()
+const afterOpenBin = instance.getSnapshot()
+ok(afterOpenBin.detail.result === null, '打开回收站时关闭删除结果窗')
+
+// --- 10. 恢复的成败提示写在弹窗内 -------------------------------------------
+
+restoreMode = 'fail'
+await controller.restoreBin('entry-1')
+const failNotice = instance.getSnapshot().binNotice
+ok(failNotice?.tone === 'error' && failNotice.text.includes('target exists'), '恢复失败提示写在回收站弹窗内')
+ok(instance.getSnapshot().notice === null || instance.getSnapshot().notice.text !== failNotice.text, '失败提示不再只写在被盖住的页面上')
+const failTree = renderPage(instance.getSnapshot())
+ok(findNode(failTree, node => node.props?.className === 'dsm-binDialog').length === 1, '恢复失败后弹窗仍开着')
+ok(findNode(failTree, node => node.props?.role === 'status' && JSON.stringify(node.children).includes('target exists')).length === 1, '失败原因渲染在弹窗里')
+
+restoreMode = 'ok'
+instance.actions.setBinNotice(null)
+await controller.restoreBin('entry-1')
+const okSnap = instance.getSnapshot()
+ok(okSnap.binOpen === true, '恢复成功后弹窗不因刷新而关闭')
+ok(okSnap.binNotice?.tone === 'info', '恢复成功提示写在弹窗内')
+ok(binEntries.length === 1, '恢复的条目从回收站消失')
+const okTree = renderPage(okSnap)
+ok(findNode(okTree, node => node.props?.className === 'dsm-binDialog')[0].props.title === '回收站 · 1', '弹窗条目数随刷新更新')
+
+instance.actions.closeBin()
+ok(instance.getSnapshot().binNotice === null, '关闭弹窗清掉提示')
+binEntries = []
+await controller.openResources(SESSION)
+instance.actions.openBin()
+const emptyDialog = findNode(renderPage(instance.getSnapshot()), node => node.props?.className === 'dsm-binDialog')[0]
+ok(JSON.stringify(emptyDialog.children).includes('回收站是空的') === true, '空回收站给出说明而不是空白')
+instance.actions.closeBin()
+
+// --- 11. 关窗带走回收站状态 -------------------------------------------------
+
+instance.actions.openBin()
+instance.actions.closeDetail()
+const closed = instance.getSnapshot()
+ok(closed.binOpen === false && closed.binNotice === null, '关闭资源弹窗同时带走回收站弹窗与提示')
 
 console.log(failures === 0 ? '\nsmoke-client: all checks passed' : `\nsmoke-client: ${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

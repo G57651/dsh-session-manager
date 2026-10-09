@@ -497,10 +497,23 @@
   border-radius: var(--dsw-radius-sm);
 }
 
-.dsm-resBinSection {
-  border-top: 1px solid var(--dsw-alias-border-l1);
-  margin-top: 8px;
-  padding-top: 8px;
+/* Recycle-bin dialog (0.5.0): a narrower window over the resource table, the
+   section it replaces sat at the bottom of that table. */
+.dsm-binDialog {
+  width: min(720px, 100%);
+}
+
+.dsm-binBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  max-height: 52vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  --dsh-scrollbar-width: 9px;
+  --dsh-scrollbar-thumb-border: 2px;
 }
 
 /* --- delete progress + result dialog (0.4.4) ------------------------------ */

@@ -1,9 +1,3 @@
-import { createElement, useCallback, useEffect, useMemo } from 'react'
-import { Button, Checkbox, Modal, Pill, SegmentedTabs } from '@deepseek-ai/dsh-client-ui-primitives'
-import { IconArchiveOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import { defineStore } from '@deepseek-ai/dsh-client-store'
-import { zh, en } from './locales.js'
-import { cssText } from './styles.css.js'
 // dsh-session-manager — web client half.
 //
 // Builds into client.js via scripts/build-client.mjs, which serves this file
@@ -15,6 +9,12 @@ import { cssText } from './styles.css.js'
 //   - the only `export` statement is the trailing one, which becomes
 //     module.exports.
 
+import { createElement, useCallback, useEffect, useMemo } from 'react'
+import { Button, Checkbox, Modal, Pill, SegmentedTabs } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconArchiveOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { defineStore } from '@deepseek-ai/dsh-client-store'
+import { zh, en } from './locales.js'
+import { cssText } from './styles.css.js'
 
 const NS = 'sessionManager'
 /** The id shared by the sidebar entry and the main panel it opens. */
@@ -106,6 +106,10 @@ function createManagerStore() {
       noticeDismissed: false,
       config: { confirmPurge: true, autoRefresh: true },
       detail: null,
+      // Recycle-bin dialog (0.5.0): open flag + its own outcome line. Kept at
+      // the top level because the post-restore refresh rebuilds `detail`.
+      binOpen: false,
+      binNotice: null,
     }),
     actions: {
       setConfig: (draft, config) => { draft.config = config },
@@ -161,6 +165,8 @@ function createManagerStore() {
       // resource detail modal (0.2.x): one open detail at a time; the modal
       // owns its batch selection (open actions go through the OS file manager)
       openDetail: (draft, id) => { draft.detail = { id, loading: true, data: null, status: null, error: null, selected: [], busy: false, bin: [], progress: null, result: null } },
+      /** Leaving the resources modal takes its dialogs with it: no stale bin. */
+      closeDetail: (draft) => { draft.detail = null; draft.binOpen = false; draft.binNotice = null },
       toggleDetailSelect: (draft, key) => {
         if (draft.detail === null) return
         draft.detail.selected = draft.detail.selected.includes(key)
@@ -188,6 +194,20 @@ function createManagerStore() {
       clearDetailResult: (draft) => {
         if (draft.detail !== null) draft.detail.result = null
       },
+      // Only one dialog at a time over the resource table: the outcome of a
+      // delete and the bin would otherwise stack on top of each other.
+      openBin: (draft) => {
+        draft.binOpen = true
+        draft.binNotice = null
+        if (draft.detail !== null) draft.detail.result = null
+      },
+      closeBin: (draft) => {
+        draft.binOpen = false
+        draft.binNotice = null
+      },
+      setBinNotice: (draft, notice) => {
+        if (draft.binOpen === true) draft.binNotice = notice
+      },
       setDetailData: (draft, data) => {
         if (draft.detail !== null && draft.detail.id === data?.sessionId) {
           draft.detail.loading = false
@@ -206,7 +226,6 @@ function createManagerStore() {
           draft.detail.error = message
         }
       },
-      closeDetail: (draft) => { draft.detail = null },
     },
   })
 }
@@ -342,26 +361,6 @@ function createController({ ctx, api, instance, extendSuppression }) {
     return true
   }
 
-  /** Batch-open every selected resource; failures surface per-row. */
-  async function openSelected() {
-    const detail = instance.getSnapshot().detail
-    if (detail === null || detail.busy === true) return
-    const rowsByKey = new Map((detail.data?.resources ?? []).map(row => [rowKeyOf(row), row]))
-    const targets = detail.selected.map(key => rowsByKey.get(key)).filter(row => row !== undefined)
-    if (targets.length === 0) return
-    instance.actions.setDetailBusy(true)
-    let failures = 0
-    for (const row of targets) {
-      const opened = await openOne(detail.id, row.identifier)
-      if (opened !== true) failures += 1
-    }
-    instance.actions.setDetailBusy(false)
-    if (failures === 0) {
-      instance.actions.setNotice({ tone: 'info', text: t('res.batchOpened', { n: targets.length }) })
-      instance.actions.setDetailSelected([])
-    }
-  }
-
   /**
    * Move one resource to the OS wastebasket (user-initiated, recoverable).
    * Returns the outcome instead of raising a notice: the batch caller
@@ -444,20 +443,28 @@ function createController({ ctx, api, instance, extendSuppression }) {
     return deletePaths([{ key: rowKeyOf(row), path: row.identifier }])
   }
 
-  /** Restore one recycle-bin entry to its original workspace position. */
+  /**
+   * Restore one recycle-bin entry to its original workspace position.
+   * The outcome is reported inside the bin dialog (0.5.0): the page notice it
+   * used to raise sits behind that dialog, so a failed restore looked like a
+   * silent no-op.
+   */
   async function restoreBin(entryId) {
     const detail = instance.getSnapshot().detail
     if (detail === null || detail.busy === true) return false
     instance.actions.setDetailBusy(true)
     const result = await api.recycleRestore(entryId)
     instance.actions.setDetailBusy(false)
+    const restoredPath = result?.ok === true ? result.value?.originalPath ?? '' : null
+    await openResources(detail.id, { refresh: true }).catch(() => {})
+    // the refresh rebuilt the detail object; the dialog and its line go on the
+    // top-level bin state, so they outlive it
     if (result?.ok !== true) {
       console.warn('[dsh-session-manager] recycleRestore failed:', describeError(result?.error))
-      instance.actions.setNotice({ tone: 'error', text: t('res.restoreFailed', { reason: formatError(result?.error) }) })
+      instance.actions.setBinNotice({ tone: 'error', text: t('res.restoreFailed', { reason: formatError(result?.error) }) })
       return false
     }
-    instance.actions.setNotice({ tone: 'info', text: t('res.restored', { name: result.value?.originalPath ?? '' }) })
-    await openResources(detail.id, { refresh: true }).catch(() => {})
+    instance.actions.setBinNotice({ tone: 'info', text: t('res.restored', { name: restoredPath }) })
     return true
   }
 
@@ -476,7 +483,7 @@ function createController({ ctx, api, instance, extendSuppression }) {
     }
   }
 
-  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, openSelected, deleteOne, deletePaths, deleteSelected, deleteOneRow, restoreBin, openWorkspace, dispose }
+  return { load, ensureLoaded, scheduleRefresh, subscribeEvents, runOp, openResources, openOne, deleteOne, deletePaths, deleteSelected, deleteOneRow, restoreBin, openWorkspace, dispose }
 }
 
 /** Stable per-row key used by the modal's batch selection. */
@@ -791,7 +798,50 @@ function DeleteResultModal({ result, actions, t }) {
   )
 }
 
-function ResourcesModal({ detail, actions, controller, t }) {
+/**
+ * Recycle-bin dialog (0.5.0). The bin used to be a section at the very bottom
+ * of the resource table: with a hundred tracked paths the user had to scroll
+ * past all of them to find a file they just deleted. It now opens from the
+ * toolbar, and a restore reports its outcome inside the dialog — the page
+ * notice it used to raise is behind this dialog, so a failed restore looked
+ * like a silent no-op.
+ */
+function BinModal({ detail, binEntries, notice, actions, controller, t }) {
+  return h(Modal, {
+    open: true,
+    onClose: actions.closeBin,
+    title: `${t('res.binTitle')} · ${binEntries.length}`,
+    description: t('res.binDialogHint'),
+    closeLabel: t('action.closeModal'),
+    className: 'dsm-binDialog',
+    footer: h(Button, { variant: 'primary', size: 'sm', onClick: actions.closeBin }, t('action.closeModal')),
+  },
+    h('div', { className: 'dsm-binBody' },
+      notice !== null && h('div', { className: cx('dsm-notice', notice.tone === 'error' ? 'dsm-noticeError' : 'dsm-noticeInfo'), role: 'status' },
+        h('span', null, notice.text)),
+      binEntries.length === 0
+        ? h('p', { className: 'dsm-resHint' }, t('res.binEmpty'))
+        : h('div', { className: 'dsm-resGroupList' },
+            binEntries.map(entry => h('div', { key: entry.entryId, className: 'dsm-resRow' },
+              h('div', { className: 'dsm-resMain' },
+                h('div', { className: 'dsm-resId' }, entry.originalPath),
+                h('div', { className: 'dsm-resExtra' }, [
+                  entry.type === 'directory' ? t('res.binDir') : null,
+                ].filter(Boolean).join(' · ')),
+              ),
+              h('div', { className: 'dsm-resPills' },
+                h(Button, {
+                  variant: 'ghost',
+                  size: 'sm',
+                  disabled: detail.busy === true,
+                  onClick: () => void controller.restoreBin(entry.entryId),
+                }, t('res.restore'))),
+            ))),
+    ),
+  )
+}
+
+function ResourcesModal({ detail, actions, controller, t, binOpen, notice }) {
   const data = detail.data
   // A user-trashed resource reads status:'trashed' ONLY while it is really off
   // disk — the host flips it back to 'present' the moment it is restored (from
@@ -863,13 +913,16 @@ function ResourcesModal({ detail, actions, controller, t }) {
             disabled: detail.selected.length === 0 || detail.busy === true,
             onClick: () => void controller.deleteSelected(),
           }, t('res.deleteSelected', { n: detail.selected.length })),
+          // 0.5.0: this slot used to be 「打开所选」. The bin lived at the very
+          // bottom of the table — past every tracked path — so it is opened
+          // from here instead, at the same rank as the delete action.
           h(Button, {
-            key: 'batch',
+            key: 'bin',
             variant: 'ghost',
             size: 'sm',
-            disabled: detail.selected.length === 0 || detail.busy === true,
-            onClick: () => void controller.openSelected(),
-          }, t('res.openSelected', { n: detail.selected.length })),
+            disabled: detail.busy === true,
+            onClick: () => actions.openBin(),
+          }, t('res.binButton', { n: binEntries.length })),
         ),
 
         // Delete progress (0.4.4): the batch is one wastebasket move per file,
@@ -943,33 +996,21 @@ function ResourcesModal({ detail, actions, controller, t }) {
           )
         }),
 
-        // --- 回收站区块：当前会话被删除的资源，可恢复到原位 ---
-        binEntries.length > 0 && h('div', { key: 'binSection', className: 'dsm-resGroup dsm-resBinSection' },
-          h('div', { className: 'dsm-resGroupTitle' }, `${t('res.binTitle')} · ${binEntries.length}`),
-          h('div', { className: 'dsm-resGroupList' },
-            binEntries.map(entry => h('div', { key: entry.entryId, className: 'dsm-resRow' },
-              h('div', { className: 'dsm-resMain' },
-                h('div', { className: 'dsm-resId' }, entry.originalPath),
-                h('div', { className: 'dsm-resExtra' }, [
-                  entry.type === 'directory' ? t('res.binDir') : null,
-                ].filter(Boolean).join(' · ')),
-              ),
-              h('div', { className: 'dsm-resPills' },
-                h(Button, {
-                  key: 'restore',
-                  variant: 'ghost',
-                  size: 'sm',
-                  disabled: detail.busy === true,
-                  onClick: () => void controller.restoreBin(entry.entryId),
-                }, t('res.restore')),
-              ),
-            ))),
-        ),
-
+        // (0.5.0) The bin section that used to sit here — below every resource
+        // group — is gone; it now opens as BinModal from the toolbar.
         // The outcome dialog for the last delete batch, success or failure. It
         // portals to document.body, so nesting it here still floats it above
         // the resources modal; closing it leaves the refreshed list underneath.
         detail.result !== null && h(DeleteResultModal, { key: 'result', result: detail.result, actions, t }),
+        binOpen === true && h(BinModal, {
+          key: 'bin',
+          detail,
+          binEntries,
+          notice,
+          actions,
+          controller,
+          t,
+        }),
       ],
     ),
   )
@@ -987,6 +1028,8 @@ function SessionManagerPage(props) {
   const selectedIds = useStore(s => s.selectedIds)
   const confirmPurgeIds = useStore(s => s.confirmPurgeIds)
   const detail = useStore(s => s.detail)
+  const binOpen = useStore(s => s.binOpen)
+  const binNotice = useStore(s => s.binNotice)
   const config = useStore(s => s.config)
   const sources = useStore(s => s.sources)
   const noticeDismissed = useStore(s => s.noticeDismissed)
@@ -1054,7 +1097,7 @@ function SessionManagerPage(props) {
               }))),
     selectMode && h(BatchBar, { view, rows, selectedIds, actions, controller, t, config }),
     confirmPurgeIds !== null && h(PurgeConfirmModal, { ids: confirmPurgeIds, rows, actions, controller, t }),
-    detail !== null && h(ResourcesModal, { detail, actions, controller, t }),
+    detail !== null && h(ResourcesModal, { detail, actions, controller, t, binOpen, notice: binNotice }),
   )
 }
 
@@ -1144,6 +1187,5 @@ function apply(ctx) {
 
   ctx.effect(() => () => controller.dispose(), 'dsh-session-manager: controller timers and event listeners')
 }
-
 
 export { inject, apply }
