@@ -231,6 +231,12 @@ node scripts/smoke-lifecycle.mjs   # 356 项：十场景 + 资源视图 + 回收
 
 ## 变更记录
 
+### 0.4.3 — 两轮代码审计（audit + audit2）+ 版本号补正
+
+v0.4.2 之后合入 6 个提交：两轮审计修复（journal `nextSeq()` 的 O(n²) 写放大、凭据脱敏漏厂商前缀签名参数、客户端传输层拒绝被静默吞掉、回收站索引并发幽灵条目、IPv6 回环误拒、跨会话隔离与同工作区归属边界）与文档重排。
+当时只打了「全流程真机端到端测试通过」的标签，**没有顺带 bump `package.json` 的 version**，所以该标签里包内版本号仍写着 0.4.2。本提交只把版本号补到 `0.4.3`，**代码内容零改动**（`client.js` / `index.js` / `session-manage.js` / `lifecycle/**` 逐文件哈希与 v0.4.3 原标签一致）。
+
+
 ### 0.4.2 — 会话资源删除链路修复 + 归档/删除后页面稳定
 
 - **问题 1**：会话资源页回收站功能缺失。补 `api.recycleList` / `recycleRestore`、`openResources` 并行拉取回收站、`restoreBin` 方法 + 导出。
